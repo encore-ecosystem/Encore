@@ -2,7 +2,18 @@
 
 [Introduction](introduction.md)
 
+# Learn Encore
+
+- [Installation and Editor Setup](installation.md)
 - [Getting Started](getting-started.md)
+- [Project: A Text Report](text-report.md)
+- [Values, Sharing, and Mutation](values-and-sharing.md)
+- [Designing APIs and Handling Errors](designing-programs.md)
+- [Project: Parallel Work](parallel-project.md)
+- [Development and Performance](development.md)
+
+# Language Reference
+
 - [Language Guide](language-basics.md)
   - [Comments and Documentation](features/comments-and-docs.md)
   - [Imports and Visibility](features/imports-and-visibility.md)
@@ -28,9 +39,8 @@
   - [Spawn and Join](features/spawn-and-join.md)
   - [Declarative Macros](features/macros.md)
   - [Unsafe Code and Embedded EHIR](features/unsafe-and-ehir.md)
-- [Memory Model](memory-model.md)
+- [Language Construct Examples](language-construct-examples.md)
 - [Concurrency](concurrency.md)
-- [Compiler Logic](compiler-logic.md)
 - [Analysis and Tooling](analysis-tooling.md)
 - [Packages and Build Scripts](packages.md)
   - [Publishing Packages](publishing-packages.md)
@@ -70,5 +80,13 @@
   - [`std::time`](library/std/time.md)
   - [`std::tls`](library/std/tls.md)
   - [`std::vec`](library/std/vec.md)
-- [Native UI](native-ui.md)
-- [Beta Notes](beta-notes.md)
+
+# Advanced Topics and Appendices
+
+- [Memory Model and ERN](memory-model.md)
+- [Compiler Logic](compiler-logic.md)
+- [Syntax Quick Reference](syntax-reference.md)
+- [Troubleshooting](troubleshooting.md)
+- [Coming from Another Language](coming-from.md)
+- [Glossary](glossary.md)
+- [Coverage and Current Limitations](beta-notes.md)

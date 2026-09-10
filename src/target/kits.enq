@@ -1,24 +1,28 @@
 //! Installs and resolves compiler-coupled target kits.
 
+import argparse::{process_arg_count, process_arg}
 import core::option::Option
 import core::result::Result
 import json::{Json, parse}
 import std::io::{eprintln, println}
 import std::os::{env, file_exists, file_sha256, home_dir, is_directory, mkdir_all, read_file, remove_dir_all, remove_file}
-import argparse::{process_arg_count, process_arg}
 import std::path::Path
 import std::process::{run_args, run_args_capture}
 import std::vec::Vec
 
 import refrain::target::{TargetSpec, Toolchain, host_triple, parse_target, target_is_supported}
-import refrain::version::compiler_version
+import refrain::version::{compiler_release_version, compiler_version}
 
 /// Runs `encore target install`.
 pub fn install_target_kit() -> u32 {
     let triple = argument(3_usize)
-    if triple == "" { ret kit_error("target install requires a target triple") }
+    if triple == "" {
+        ret kit_error("target install requires a target triple")
+    }
     let target = parse_target(triple)
-    if !target_is_supported(target) { ret kit_error("unsupported target " + triple) }
+    if !target_is_supported(target) {
+        ret kit_error("unsupported target " + triple)
+    }
     let destination = target_kit_root(target)
     if valid_installed_kit(target, destination) {
         println("Target kit " + triple + " is already installed.")
@@ -27,8 +31,12 @@ pub fn install_target_kit() -> u32 {
 
     let parent = target_kits_root().join(target_kit_abi())
     let staging = parent.join("." + triple + ".installing")
-    if file_exists(staging.as_str()) { remove_dir_all(staging.as_str()) }
-    if mkdir_all(staging.as_str()) != 0_i32 { ret kit_error("unable to create target-kit staging directory") }
+    if file_exists(staging.as_str()) {
+        remove_dir_all(staging.as_str())
+    }
+    if mkdir_all(staging.as_str()) != 0_i32 {
+        ret kit_error("unable to create target-kit staging directory")
+    }
     let manifest = staging.join("download.json")
     if download(target_kit_manifest_url(target), manifest) != 0_i32 {
         remove_dir_all(staging.as_str())
@@ -42,27 +50,37 @@ pub fn install_target_kit() -> u32 {
         }
     }
     if json_number(document, "schema") != "1"
-        || json_string(document, "abi") != target_kit_abi()
-        || json_string(document, "host") != host_triple()
-        || json_string(document, "target") != triple {
+    || json_string(document, "abi") != target_kit_abi()
+    || json_string(document, "host") != host_triple()
+    || json_string(document, "target") != triple {
         remove_dir_all(staging.as_str())
         ret kit_error("target-kit manifest identity does not match this compiler, host, and target")
     }
     let archive_url = json_string(document, "archive")
     let checksum = json_string(document, "sha256")
     let format = value_or(json_string(document, "format"), "tar.gz")
-    if !safe_url(archive_url) || !valid_checksum(checksum) || (format != "tar.gz" && format != "tar.xz") {
+    if !safe_url(archive_url) || !valid_checksum(checksum) ||(format != "tar.gz" && format != "tar.xz") {
         remove_dir_all(staging.as_str())
         ret kit_error("target-kit manifest contains an invalid archive")
     }
-    let archive = staging.join("kit." + if format == "tar.xz" { "tar.xz" } else { "tar.gz" })
+    let archive = staging.join("kit." + if format == "tar.xz" {
+            "tar.xz"
+        } else {
+            "tar.gz"
+        }
+    )
     if download(archive_url, archive) != 0_i32 || archive_sha256(archive) != checksum {
         remove_dir_all(staging.as_str())
         ret kit_error("target-kit checksum verification failed")
     }
     let listing = staging.join("archive.list")
     let mut list_args = Vec[str]::new()
-    list_args.push(if format == "tar.xz" { "-tJf" } else { "-tzf" })
+    list_args.push(if format == "tar.xz" {
+            "-tJf"
+        } else {
+            "-tzf"
+        }
+    )
     list_args.push(archive.as_str())
     if run_args_capture("tar", list_args, listing.as_str()) != 0_i32 || !safe_archive_paths(read_file(listing.as_str())) {
         remove_dir_all(staging.as_str())
@@ -70,7 +88,12 @@ pub fn install_target_kit() -> u32 {
     }
     let types = staging.join("archive.types")
     let mut type_args = Vec[str]::new()
-    type_args.push(if format == "tar.xz" { "-tJvf" } else { "-tvzf" })
+    type_args.push(if format == "tar.xz" {
+            "-tJvf"
+        } else {
+            "-tvzf"
+        }
+    )
     type_args.push(archive.as_str())
     if run_args_capture("tar", type_args, types.as_str()) != 0_i32 || !safe_archive_types(read_file(types.as_str())) {
         remove_dir_all(staging.as_str())
@@ -79,7 +102,12 @@ pub fn install_target_kit() -> u32 {
     let payload = staging.join("payload")
     mkdir_all(payload.as_str())
     let mut extract = Vec[str]::new()
-    extract.push(if format == "tar.xz" { "-xJf" } else { "-xzf" })
+    extract.push(if format == "tar.xz" {
+            "-xJf"
+        } else {
+            "-xzf"
+        }
+    )
     extract.push(archive.as_str())
     extract.push("-C")
     extract.push(payload.as_str())
@@ -87,7 +115,9 @@ pub fn install_target_kit() -> u32 {
         remove_dir_all(staging.as_str())
         ret kit_error("target-kit archive is incomplete")
     }
-    if file_exists(destination.as_str()) { remove_dir_all(destination.as_str()) }
+    if file_exists(destination.as_str()) {
+        remove_dir_all(destination.as_str())
+    }
     let mut activate = Vec[str]::new()
     activate.push(payload.as_str())
     activate.push(destination.as_str())
@@ -103,12 +133,16 @@ pub fn install_target_kit() -> u32 {
 /// Returns compiler/tool paths from an installed kit, or `defaults`.
 pub fn target_kit_toolchain(target: TargetSpec, defaults: Toolchain) -> Toolchain {
     let root = target_kit_root(target)
-    if !valid_installed_kit(target, root) { ret defaults }
+    if !valid_installed_kit(target, root) {
+        ret defaults
+    }
     let document = match parse(read_file(root.join("manifest.json").as_str())) {
         Result::Ok(value) => value
-        Result::Err(_) => { ret defaults }
+        Result::Err(_) => {
+            ret defaults
+        }
     }
-    ret Toolchain{
+    ret Toolchain {
         value_or(json_string(document, "driver"), defaults.driver),
         kit_path(root, json_string(document, "compiler"), defaults.compiler),
         kit_path(root, json_string(document, "linker"), defaults.linker),
@@ -144,33 +178,45 @@ pub fn target_kit_abi() -> str {
     let version = compiler_version()
     let first = find(version, ".", 0_usize)
     let second = find(version, ".", first + 1_usize)
-    if first == version.len() || second == version.len() { ret version }
+    if first == version.len() || second == version.len() {
+        ret version
+    }
     ret version.slice(0_usize, second)
 }
 
 fn valid_installed_kit(target: TargetSpec, root: Path) -> bool {
     if !is_directory(root.as_str()) || !file_exists(root.join("manifest.json").as_str())
-        || !file_exists(root.join("platform").join("encore.toml").as_str()) { ret false }
+    || !file_exists(root.join("platform").join("encore.toml").as_str()) {
+        ret false
+    }
     match parse(read_file(root.join("manifest.json").as_str())) {
         Result::Ok(document) => {
             ret json_number(document, "schema") == "1"
-                && json_string(document, "abi") == target_kit_abi()
-                && json_string(document, "host") == host_triple()
-                && json_string(document, "target") == target.triple
+            && json_string(document, "abi") == target_kit_abi()
+            && json_string(document, "host") == host_triple()
+            && json_string(document, "target") == target.triple
         }
-        Result::Err(_) => { ret false }
+        Result::Err(_) => {
+            ret false
+        }
     }
 }
 
 fn target_kits_root() -> Path {
-    match env("ENCORE_TARGETS_DIR") { Some(value) => { ret Path::new(value).expanduser().resolve() } None => {} }
+    match env("ENCORE_TARGETS_DIR") {
+        Some(value) => {
+            ret Path::new(value).expanduser().resolve()
+        }
+        None => {
+        }
+    }
     ret Path::new(home_dir()).join(".encore").join("targets")
 }
 
 fn target_kit_manifest_url(target: TargetSpec) -> str {
     let base = match env("ENCORE_TARGET_KIT_BASE_URL") {
         Some(value) => trim_slash(value)
-        None => "https://github.com/encore-ecosystem/encore/releases/download/v" + compiler_version()
+        None => "https://github.com/encore-ecosystem/encore/releases/download/v" + compiler_release_version()
     }
     ret base + "/target-kit-" + host_triple() + "--" + target.triple + ".json"
 }
@@ -195,7 +241,9 @@ fn archive_sha256(archive: Path) -> str {
         remove_file(output.as_str())
         if value.len() >= 64_usize {
             let digest = value.slice(0_usize, 64_usize)
-            if valid_checksum(digest) { ret digest }
+            if valid_checksum(digest) {
+                ret digest
+            }
         }
     }
     remove_file(output.as_str())
@@ -212,7 +260,9 @@ fn archive_sha256(archive: Path) -> str {
         remove_file(output.as_str())
         if value.len() >= 64_usize {
             let digest = value.slice(0_usize, 64_usize)
-            if valid_checksum(digest) { ret digest }
+            if valid_checksum(digest) {
+                ret digest
+            }
         }
     }
     remove_file(output.as_str())
@@ -222,7 +272,9 @@ fn archive_sha256(archive: Path) -> str {
 fn safe_archive_paths(source: str) -> bool {
     for path in split_lines(source) {
         if path == "" || starts_with(path, "/") || starts_with(path, "\\") || contains(path, "\\")
-            || path == ".." || starts_with(path, "../") || contains(path, "/../") { ret false }
+        || path == ".." || starts_with(path, "../") || contains(path, "/../") {
+            ret false
+        }
     }
     ret true
 }
@@ -230,29 +282,50 @@ fn safe_archive_types(source: str) -> bool {
     for line in split_lines(source) {
         if line != "" {
             let kind = line.slice(0_usize, 1_usize)
-            if kind != "-" && kind != "d" { ret false }
+            if kind != "-" && kind != "d" {
+                ret false
+            }
         }
     }
     ret true
 }
 
 fn kit_path(root: Path, value: str, fallback: str) -> str {
-    if value == "" { ret fallback }
+    if value == "" {
+        ret fallback
+    }
     ret root.join(value).as_str()
 }
 fn prefixed_paths(root: Path, values: Vec[str]) -> Vec[str] {
     let mut out = Vec[str]::new()
-    for value in values { out.push(root.join(value).as_str()) }
+    for value in values {
+        out.push(root.join(value).as_str())
+    }
     ret out
 }
 fn json_string(value: Json, key: str) -> str {
-    ret match value.get(key) { Some(item) => match item.as_str() { Some(text) => text None => "" } None => "" }
+    ret match value.get(key) {
+        Some(item) => match item.as_str() {
+            Some(text) => text None => ""
+        }
+        None => ""
+    }
 }
 fn json_number(value: Json, key: str) -> str {
-    ret match value.get(key) { Some(item) => match item.as_number() { Some(text) => text None => "" } None => "" }
+    ret match value.get(key) {
+        Some(item) => match item.as_number() {
+            Some(text) => text None => ""
+        }
+        None => ""
+    }
 }
 fn json_bool(value: Json, key: str, fallback: bool) -> bool {
-    ret match value.get(key) { Some(item) => match item.as_bool() { Some(found) => found None => fallback } None => fallback }
+    ret match value.get(key) {
+        Some(item) => match item.as_bool() {
+            Some(found) => found None => fallback
+        }
+        None => fallback
+    }
 }
 fn json_string_array(value: Json, key: str, fallback: Vec[str]) -> Vec[str] {
     let mut out = Vec[str]::new()
@@ -262,36 +335,71 @@ fn json_string_array(value: Json, key: str, fallback: Vec[str]) -> Vec[str] {
                 Some(values) => {
                     for value in values {
                         match value.as_str() {
-                            Some(text) => { out.push(text) }
-                            None => { ret fallback }
+                            Some(text) => {
+                                out.push(text)
+                            }
+                            None => {
+                                ret fallback
+                            }
                         }
                     }
                     ret out
                 }
-                None => {}
+                None => {
+                }
             }
         }
-        None => {}
+        None => {
+        }
     }
     ret fallback
 }
 fn valid_checksum(value: str) -> bool {
-    if value.len() != 64_usize { ret false }
+    if value.len() != 64_usize {
+        ret false
+    }
     let mut index = 0_usize
     while index < value.len() {
-        if !contains("0123456789abcdef", value.slice(index, 1_usize)) { ret false }
+        if !contains("0123456789abcdef", value.slice(index, 1_usize)) {
+            ret false
+        }
         index += 1_usize
     }
     ret true
 }
-fn safe_url(value: str) -> bool { ret starts_with(value, "https://") || starts_with(value, "file://") }
-fn value_or(value: str, fallback: str) -> str { ret if value == "" { fallback } else { value } }
-fn trim_slash(value: str) -> str { ret if ends_with(value, "/") { value.slice(0_usize, value.len() - 1_usize) } else { value } }
-fn argument(index: usize) -> str { ret match argv(index) { Some(value) => value None => "" } }
-fn kit_error(message: str) -> u32 { eprintln("error[target-kit]: " + message) ret 1_u32 }
+fn safe_url(value: str) -> bool {
+    ret starts_with(value, "https://") || starts_with(value, "file://")
+}
+fn value_or(value: str, fallback: str) -> str {
+    ret if value == "" {
+        fallback
+    } else {
+        value
+    }
+}
+fn trim_slash(value: str) -> str {
+    ret if ends_with(value, "/") {
+        value.slice(0_usize, value.len() - 1_usize)
+    } else {
+        value
+    }
+}
+fn argument(index: usize) -> str {
+    ret match argv(index) {
+        Some(value) => value None => ""
+    }
+}
+fn kit_error(message: str) -> u32 {
+    eprintln("error[target-kit]: " + message) ret 1_u32
+}
 fn find(value: str, needle: str, offset: usize) -> usize {
     let mut index = offset
-    while index + needle.len() <= value.len() { if value.slice(index, needle.len()) == needle { ret index } index += 1_usize }
+    while index + needle.len() <= value.len() {
+        if value.slice(index, needle.len()) == needle {
+            ret index
+        }
+        index += 1_usize
+    }
     ret value.len()
 }
 fn split_lines(value: str) -> Vec[str] {
@@ -301,16 +409,28 @@ fn split_lines(value: str) -> Vec[str] {
     while index <= value.len() {
         if index == value.len() || value.byte_at(index) == 10_u8 {
             let line = value.slice(start, index - start)
-            if line != "" { out.push(line) }
+            if line != "" {
+                out.push(line)
+            }
             start = index + 1_usize
         }
         index += 1_usize
     }
     ret out
 }
-fn starts_with(value: str, prefix: str) -> bool { ret prefix.len() <= value.len() && value.slice(0_usize, prefix.len()) == prefix }
-fn ends_with(value: str, suffix: str) -> bool { ret suffix.len() <= value.len() && value.slice(value.len() - suffix.len(), suffix.len()) == suffix }
-fn contains(value: str, needle: str) -> bool { ret find(value, needle, 0_usize) != value.len() }
+fn starts_with(value: str, prefix: str) -> bool {
+    ret prefix.len() <= value.len() && value.slice(0_usize, prefix.len()) == prefix
+}
+fn ends_with(value: str, suffix: str) -> bool {
+    ret suffix.len() <= value.len() && value.slice(value.len() - suffix.len(), suffix.len()) == suffix
+}
+fn contains(value: str, needle: str) -> bool {
+    ret find(value, needle, 0_usize) != value.len()
+}
 
-fn argc() -> usize { ret process_arg_count() }
-fn argv(index: usize) -> Option[str] { ret process_arg(index) }
+fn argc() -> usize {
+    ret process_arg_count()
+}
+fn argv(index: usize) -> Option[str] {
+    ret process_arg(index)
+}

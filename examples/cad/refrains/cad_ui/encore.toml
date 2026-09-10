@@ -1,7 +1,0 @@
-[project]
-name = "cad_ui"
-version = "0.1.0"
-description = "Native window and drawing primitives for Encore CAD examples"
-readme = "README.md"
-licence = "MIT"
-dependencies = ["path@../../../../../encore-index/packages/std"]

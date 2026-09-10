@@ -1,7 +1,0 @@
-[project]
-name = "cad_kernel"
-version = "0.1.0"
-description = "Parametric CAD geometry kernel for Encore examples"
-readme = "README.md"
-licence = "MIT"
-dependencies = []

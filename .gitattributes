@@ -1,7 +1,0 @@
-index/encore-ui/**/*.otf filter=lfs diff=lfs merge=lfs -text
-index/encore-ui/**/*.woff filter=lfs diff=lfs merge=lfs -text
-index/encore-ui/**/*.woff2 filter=lfs diff=lfs merge=lfs -text
-index/encore-ui/**/*.ttf filter=lfs diff=lfs merge=lfs -text
-index/encore-ui/assets/icons/**/*.svg filter=lfs diff=lfs merge=lfs -text
-index/encore-ui/**/OFL.txt text eol=lf
-index/core/tests/sha256_fixture.txt text eol=lf

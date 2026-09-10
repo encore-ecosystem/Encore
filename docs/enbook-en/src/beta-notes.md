@@ -1,54 +1,62 @@
-# Release Notes
+# Coverage and Current Limitations
 
-## Encore 0.2.0
+This book describes the Neumann source line, not the old 0.2 release.
+A source feature, a passing local test, and a published cross-platform release
+are different milestones. Check the installed compiler's `--version` before
+comparing diagnostics. Do not treat unreleased package URLs as available.
 
-- Compile-time decorators support arguments, stacking, functions, methods,
-  synchronous code, and asynchronous code. Decorator calls lower directly to
-  hidden implementations without runtime callable dispatch.
-- Immutable `static` declarations enable named decorator-manager syntax such
-  as `@RENDER_PROFILE.profile("draw_frame")`.
-- The `profile` package provides process-wide aggregated nanosecond timing.
-- The LLVM backend emits shared generic, ownership, trait-dispatch, and graph
-  support once per compilation bundle instead of duplicating it in every code
-  generation unit.
-- Large generated state machines avoid the quadratic source mem2reg path while
-  retaining entry-block stack-allocation hoisting.
-- Clean self-host compilation is substantially faster and uses much less peak
-  memory than 0.1.5.
+## Find a feature
 
-## Validated Surface
+| Language area | Explanation | Source-backed example/check |
+| --- | --- | --- |
+| literals, radix, inference, casts | [literals](features/literals.md), [operators](features/operators-and-casts.md) | guide numeric/Unicode test; compiler numeric-literal regressions |
+| bindings, static, inline/node types, mutation | [values](values-and-sharing.md), [bindings](features/bindings-and-static.md), [methods](features/methods.md) | guide bindings/methods; compiler mutable-receiver tests |
+| functions, generics, closures, traits and dyn | [functions](features/functions-and-generics.md), [closures](features/closures.md), [traits](features/traits-and-dyn.md) | guide feature examples; compiler generic/trait/closure regressions |
+| enums, matching, conditions, iteration | [enums](features/enums-and-match.md), [loops](features/loops-and-ranges.md) | guide feature examples; compiler exhaustive-match tests |
+| arrays, tuples, vectors, strings | [collections](features/collections.md), [strings](features/strings-and-fstrings.md) | guide collections and text-report cases |
+| modules, imports, docs, packages, cfg | [imports](features/imports-and-visibility.md), [packages](packages.md), [attributes](features/attributes-and-cfg.md) | compiled guide module graph |
+| Result, propagation, resources | [errors](designing-programs.md), [context managers](features/context-managers.md) | guide Result example and argument tests |
+| async/await, spawn/join, sending/frozen | [concurrency](concurrency.md), [parallel project](parallel-project.md) | guide parallel/async examples; compiler transfer-negative tests |
+| macros and decorators | [macros](features/macros.md), [decorators](features/decorators.md) | guide feature examples; compiler expansion/decorator regressions |
+| extern, unsafe, EHIR, ABI | [unsafe](features/unsafe-and-ehir.md), [memory model](memory-model.md) | guide native fragment; compiler native/stack-escape regressions |
 
-The current release gate validates:
+This is a navigation/coverage map, not a claim that every boundary condition
+has been verified on every target. Library pages explain representative APIs,
+not a complete generated API reference.
 
-- local compiler commands: `init`, `sync`, `add`, `build`, `run`, `test`,
-  `update`;
-- EHIR and the bundled LLVM backend;
-- `core` and `std` workflows for vectors, dictionaries, strings, paths,
-  filesystem access, process/fmt, math/random, time and networking;
-- language regression coverage for `for`, iterators, `match`, methods,
-  ownership/drop behavior, generic inference and `dyn Trait`;
-- negative tests with expected diagnostics.
+## Boundaries to know
 
-## Known Limits
+- Neumann's release and index publication must complete before fresh-cache
+  installation and `index@...@0.0.0` examples can be verified end to end.
+- Native/cross compilation needs the matching compiler driver, linker, target
+  libraries and SDK. See [targets](targets.md); macOS SDKs are not redistributed.
+- The text-report project's file-reading API lacks a structured read error.
+  Its existence check is not a race-free or permission-complete I/O guarantee.
+- Out-of-range literals are checked; that does not establish a universal
+  checked runtime-arithmetic contract. Keep calculations in range.
+- Node ownership, mutable capabilities, and thread transfer are distinct.
+  Passing a node to `spawn` without an appropriate contract is not a supported
+  workaround for shared mutation.
+- A successful `check` cannot prove native linkability or runtime correctness.
+  LSP diagnostics also do not replace executing tests.
 
-- Linux and macOS are the validated native release platforms.
-- Other LLVM-compatible targets are supported through explicit toolchain and
-  runtime configuration but do not receive production compiler archives.
-- The v1 package index selects the last non-yanked release and does not yet
-  support manifest version constraints or package search.
-- MLIR integration, structural inheritance and long-term backend dialect
-  design are outside this release gate.
-- Full-repository static type checking still has known baseline diagnostics
-  outside the release-critical build/test command paths.
+See [troubleshooting](troubleshooting.md) for reducing a failure and reporting
+the command, target, version, and smallest reproducer.
 
-## Reporting Issues
+## Build the book locally
 
-When reducing a compiler or library issue, include:
+From the compiler repository root:
 
-- the package's `encore.toml`;
-- the smallest `.enq` file that reproduces it;
-- the exact command, for example `encore test --filter dict`;
-- the complete diagnostic output.
+```sh
+mdbook build docs/enbook-en
+cd docs/enbook-en/examples/guide
+encore check
+encore test --jobs 2
+encore build
+```
 
-Prefer adding a regression test as a `#attr(test)` function in the relevant
-module when the behavior is meant to be part of the beta surface.
+The guide's relative dependency points to the sibling development index.
+This is a contributor fixture, not the manifest to copy into an application.
+The tutorials instead instruct readers to create their own project and add
+published dependencies. Before publication, local fixture results do not
+substitute for the clean-install reader walkthrough.

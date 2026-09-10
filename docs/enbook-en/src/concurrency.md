@@ -42,7 +42,7 @@ fn identity[T](value: T) -> T {
 let answer = spawn identity[u32](42_u32)
 ```
 
-Use `core::thread::available_parallelism()` to inspect the number of logical
+Use `std::thread::available_parallelism()` to inspect the number of logical
 processors available to the process. Avoid starting an unbounded number of
 native threads; partition long-lived work across a bounded worker set.
 

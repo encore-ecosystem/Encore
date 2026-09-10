@@ -2,6 +2,7 @@
 
 import core::option::Option
 import refrain::frontend::parser::Documentation
+import refrain::frontend::tooling_tokens_from_tokens
 import refrain::frontend::{DiagnosticLabelKind, Expr, FrontendDocument, FrontendDiagnostic, Lexer, MatchArmBody, Statement, SuggestionApplicability, Token, TokenType}
 import std::vec::Vec
 
@@ -234,11 +235,12 @@ pub fn analyze_source_document(path: str, source: str, document: FrontendDocumen
     if source != "" {
         emit_trailing_whitespace(path, source, config, out)
     }
-    emit_unused_imports(path, document, config, out)
-    emit_unused_variables(path, document, config, out)
+    let usage_tokens = tooling_tokens_from_tokens(document.tokens)
+    emit_unused_imports(path, document, usage_tokens, config, out)
+    emit_unused_variables(path, document, usage_tokens, config, out)
     emit_unused_mut(path, document, config, out)
     emit_unreachable_code(path, document, config, out)
-    emit_dead_code(path, document, config, out)
+    emit_dead_code(path, document, usage_tokens, config, out)
     emit_redundant_conditions(path, document, config, out)
     emit_unreachable_patterns(path, document, config, out)
     ret out
@@ -617,7 +619,7 @@ fn named_location(tokens: Vec[Token], name: str, fallback: TokenType) ->(usize, 
     ret first_location(tokens)
 }
 
-fn emit_unused_imports(path: str, document: FrontendDocument, config: AnalyzerConfig, out: mut Vec[AnalyzerDiagnostic])
+fn emit_unused_imports(path: str, document: FrontendDocument, usage_tokens: Vec[Token], config: AnalyzerConfig, out: mut Vec[AnalyzerDiagnostic])
 ->() {
     let level = config.level("unused-imports")
     if level == RuleLevel::Allow {
@@ -627,7 +629,7 @@ fn emit_unused_imports(path: str, document: FrontendDocument, config: AnalyzerCo
         match statement {
             Statement::Import(item) => {
                 for name in imported_names(item.path) {
-                    if identifier_occurrences(document.tokens, name) <= 1_usize {
+                    if identifier_occurrences(usage_tokens, name) <= 1_usize {
                         let location = named_location(document.tokens, name, TokenType::KW_IMPORT)
                         out.push(AnalyzerDiagnostic {
                                 path, level, "unused-imports", "unused import '" + name + "'", location.0,
@@ -645,7 +647,7 @@ fn emit_unused_imports(path: str, document: FrontendDocument, config: AnalyzerCo
     ret()
 }
 
-fn emit_unused_variables(path: str, document: FrontendDocument, config: AnalyzerConfig, out: mut Vec[AnalyzerDiagnostic])
+fn emit_unused_variables(path: str, document: FrontendDocument, usage_tokens: Vec[Token], config: AnalyzerConfig, out: mut Vec[AnalyzerDiagnostic])
 ->() {
     let level = config.level("unused-variables")
     if level == RuleLevel::Allow {
@@ -656,7 +658,7 @@ fn emit_unused_variables(path: str, document: FrontendDocument, config: Analyzer
             Statement::Function(item) => {
                 match item.body {
                     Option::Some(body) => {
-                        emit_unused_in_statements(path, body.statements, document.tokens, level, out)
+                        emit_unused_in_statements(path, body.statements, usage_tokens, level, out)
                     }
                     Option::None => {
                     }
@@ -666,7 +668,7 @@ fn emit_unused_variables(path: str, document: FrontendDocument, config: Analyzer
                 for method in item.methods {
                     match method.body {
                         Option::Some(body) => {
-                            emit_unused_in_statements(path, body.statements, document.tokens, level,
+                            emit_unused_in_statements(path, body.statements, usage_tokens, level,
                                 out,)
                         }
                         Option::None => {
@@ -910,7 +912,7 @@ fn statements_require_mutable_name(statements: Vec[Statement], name: str) -> boo
     ret false
 }
 
-fn emit_dead_code(path: str, document: FrontendDocument, config: AnalyzerConfig, out: mut Vec[AnalyzerDiagnostic])
+fn emit_dead_code(path: str, document: FrontendDocument, usage_tokens: Vec[Token], config: AnalyzerConfig, out: mut Vec[AnalyzerDiagnostic])
 ->() {
     let level = config.level("dead-code")
     if level == RuleLevel::Allow {
@@ -919,7 +921,7 @@ fn emit_dead_code(path: str, document: FrontendDocument, config: AnalyzerConfig,
     for statement in document.ast {
         match statement {
             Statement::Function(item) => {
-                if !item.is_public && item.name != "main" && !function_is_test(item.attrs) && identifier_occurrences(document.tokens,
+                if !item.is_public && item.name != "main" && !function_is_test(item.attrs) && identifier_occurrences(usage_tokens,
                     item.name,) <= 1_usize {
                     out.push(AnalyzerDiagnostic {
                             path, level, "dead-code", "function '" + item.name + "' is never used", item.line,
@@ -930,7 +932,7 @@ fn emit_dead_code(path: str, document: FrontendDocument, config: AnalyzerConfig,
                 }
             }
             Statement::Struct(item) => {
-                if !item.is_public && identifier_occurrences(document.tokens, item.name) <= 1_usize {
+                if !item.is_public && identifier_occurrences(usage_tokens, item.name) <= 1_usize {
                     let location = named_location(document.tokens, item.name, TokenType::KW_STRUCT)
                     out.push(AnalyzerDiagnostic {
                             path, level, "dead-code", "struct '" + item.name + "' is never used", location.0,
@@ -941,7 +943,7 @@ fn emit_dead_code(path: str, document: FrontendDocument, config: AnalyzerConfig,
                 }
             }
             Statement::EnumItem(item) => {
-                if !item.is_public && identifier_occurrences(document.tokens, item.name) <= 1_usize {
+                if !item.is_public && identifier_occurrences(usage_tokens, item.name) <= 1_usize {
                     let location = named_location(document.tokens, item.name, TokenType::KW_ENUM)
                     out.push(AnalyzerDiagnostic {
                             path, level, "dead-code", "enum '" + item.name + "' is never used", location.0,
@@ -952,7 +954,7 @@ fn emit_dead_code(path: str, document: FrontendDocument, config: AnalyzerConfig,
                 }
             }
             Statement::Trait(item) => {
-                if !item.is_public && identifier_occurrences(document.tokens, item.name) <= 1_usize {
+                if !item.is_public && identifier_occurrences(usage_tokens, item.name) <= 1_usize {
                     out.push(AnalyzerDiagnostic {
                             path, level, "dead-code", "trait '" + item.name + "' is never used", item.line,
                             item.column, item.name.len()

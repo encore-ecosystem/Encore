@@ -1,0 +1,136 @@
+//! Pure computations and checked examples for the book's project chapters.
+
+import core::option::Option
+import core::result::Result
+import core::vec::Vec
+
+// ANCHOR: count_lines
+/// Counts newline terminators, not visually wrapped screen lines.
+pub fn count_lines(text: str) -> usize {
+    let mut count = 0_usize
+    let mut index = 0_usize
+    while index < text.byte_len() {
+        if text.byte_at(index) == 10_u8 {
+            count += 1_usize
+        }
+        index += 1_usize
+    }
+    ret count
+}
+// ANCHOR_END: count_lines
+
+// ANCHOR: report
+/// Describes the units printed by the text-report CLI.
+pub struct Report {
+    lines: usize
+    words: usize
+    bytes: usize
+}
+
+/// Counts words separated by ASCII spaces, tabs, CR, or LF.
+pub fn analyze(text: str) -> Report {
+    let mut words = 0_usize
+    let mut in_word = false
+    let mut index = 0_usize
+    while index < text.byte_len() {
+        let byte = text.byte_at(index)
+        let separator = byte == 32_u8 || byte == 9_u8 || byte == 10_u8 || byte == 13_u8
+        if separator {
+            in_word = false
+        } else {
+            if !in_word {
+                words += 1_usize
+            }
+            in_word = true
+        }
+        index += 1_usize
+    }
+    ret Report {
+        count_lines(text), words, text.byte_len()
+    }
+}
+// ANCHOR_END: report
+
+// ANCHOR: argument
+/// Requires exactly one positional path without conflating missing and empty.
+pub fn input_path(first: Option[str], second: Option[str]) -> Result[str, str] {
+    if second.is_some() {
+        ret Result::Err("expected one input file")
+    }
+    match first {
+        Option::Some(path) => {
+            if path == "" {
+                ret Result::Err("input path is empty")
+            }
+            ret Result::Ok(path)
+        }
+        Option::None => {
+            ret Result::Err("usage: text_report <file>")
+        }
+    }
+}
+// ANCHOR_END: argument
+
+// ANCHOR: parallel
+/// Processes one exclusive batch on a worker.
+pub fn sum_batch(values: sending Vec[u32]) -> u64 {
+    let mut total = 0_u64
+    for value in values {
+        total += value as u64
+    }
+    ret total
+}
+
+/// Uses exactly two workers and combines their independently computed results.
+pub fn parallel_total() -> u64 {
+    let mut left_values = Vec[u32]::new()
+    left_values.push(10_u32)
+    left_values.push(20_u32)
+    let mut right_values = Vec[u32]::new()
+    right_values.push(30_u32)
+    right_values.push(40_u32)
+    let left = spawn sum_batch(left_values)
+    let right = spawn sum_batch(right_values)
+    ret left.join() + right.join()
+}
+// ANCHOR_END: parallel
+
+// ANCHOR: report_tests
+#attr(test)
+fn book_text_report_cases() -> bool {
+    let empty = analyze("")
+    let ordinary = analyze("one two\nthree\n")
+    let no_terminator = analyze("one")
+    let unicode = analyze("é x\n")
+    let whitespace = analyze(" \t\r\n")
+    ret empty.lines == 0_usize && empty.words == 0_usize && empty.bytes == 0_usize
+    && ordinary.lines == 2_usize && ordinary.words == 3_usize && ordinary.bytes == 14_usize
+    && no_terminator.lines == 0_usize && no_terminator.words == 1_usize
+    && unicode.words == 2_usize && unicode.bytes == 5_usize
+    && whitespace.words == 0_usize && whitespace.lines == 1_usize
+}
+// ANCHOR_END: report_tests
+
+#attr(test)
+fn book_argument_cases() -> bool {
+    ret input_path(Option::None, Option::None).is_err()
+    && input_path(Option::Some(""), Option::None).is_err()
+    && input_path(Option::Some("a"), Option::Some("b")).is_err()
+    && input_path(Option::Some("a"), Option::None).is_ok()
+}
+
+#attr(test)
+fn book_parallel_result() -> bool {
+    ret parallel_total() == 100_u64
+}
+
+#attr(test)
+fn book_numeric_and_unicode() -> bool {
+    let small: u16 = 5000
+    let bits: u8 = 0b101010
+    let permissions: u16 = 0o755
+    let mask: u8 = 0xff
+    let text = "é"
+    ret small == 5000_u16 && bits == 42_u8 && permissions == 493_u16
+    && mask == 255_u8 && text.byte_len() == 2_usize && text.char_len() == 1_usize
+}

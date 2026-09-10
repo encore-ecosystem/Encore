@@ -1,5 +1,9 @@
 # Language Basics
 
+This is a compact reference. Unless labelled as a complete executable, snippets
+are fragments requiring the indicated types/imports and a surrounding function.
+For a sequential, runnable lesson start with [A Text Report](text-report.md).
+
 Encore source files use the `.enq` extension. Executable packages start from:
 
 ```enq

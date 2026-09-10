@@ -1,0 +1,13 @@
+import core::testing::assert
+import std::os::{mkdir_all, read_file, remove_file, write_file_atomic}
+
+fn main() -> u32 {
+    let path = "target/tests/atomic-file.txt"
+    if !assert(mkdir_all("target/tests") == 0_i32) { ret 1_u32 }
+    if !assert(write_file_atomic(path, "first") == 0_i32) { ret 2_u32 }
+    if !assert(read_file(path) == "first") { ret 3_u32 }
+    if !assert(write_file_atomic(path, "second") == 0_i32) { ret 4_u32 }
+    if !assert(read_file(path) == "second") { ret 5_u32 }
+    if !assert(remove_file(path) == 0_i32) { ret 6_u32 }
+    ret 0_u32
+}

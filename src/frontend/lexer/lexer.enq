@@ -13,7 +13,42 @@ import std::io::print
 import std::io::println
 
 extern fn encore_str_char_width_at_byte(value: str, byte_index: usize) -> usize
-extern fn encore_str_char_at_byte(value: str, byte_index: usize) -> str
+
+enum LexerByte {
+    Space
+    Tab
+    CarriageReturn
+    Newline
+    Plus
+    Minus
+    Asterisk
+    Slash
+    Percent
+    Less
+    Greater
+    LeftParen
+    RightParen
+    LeftBracket
+    RightBracket
+    LeftBrace
+    RightBrace
+    Colon
+    Dot
+    Comma
+    Semicolon
+    Equal
+    Bang
+    Ampersand
+    Pipe
+    Caret
+    Tilde
+    Question
+    Hash
+    At
+    DoubleQuote
+    Quote
+    Other
+}
 
 /// Stores the state of a `Lexer` value.
 pub struct Lexer {
@@ -63,83 +98,83 @@ impl for Lexer {
 
         let mut progress_guard = 0_usize
         loop {
+            if self.is_at_end() {
+                break
+            }
             progress_guard = progress_guard + 1_usize
             if progress_guard > self.program.byte_len() * 4_usize + 16_usize {
                 eprintln("error[lexer-invariant]: lexer made no progress at byte index " + Debug::fmt(self.consumed))
                 exit(1_i32)
             }
-            match self.peek_curr() {
-                "" => {
-                    break
-                }
-                " " => {
+            match lexer_byte(self.peek_byte(0_usize)) {
+                LexerByte::Space => {
                     self.consume_and_push(TokenType::WHITESPACE)
                 }
-                "\t" => {
+                LexerByte::Tab => {
                     self.consume_and_push(TokenType::WHITESPACE)
                 }
-                "\r" => {
+                LexerByte::CarriageReturn => {
                     self.consume()
-                    if self.peek_curr() == "\n" {
+                    if self.peek_byte(0_usize) == 10_u8 {
                         self.consumed += 1_usize
                     }
                     self.push_token(TokenType::NEWLINE)
                 }
-                "\n" => {
+                LexerByte::Newline => {
                     self.consume_and_push(TokenType::NEWLINE)
                 }
-                "+" => {
+                LexerByte::Plus => {
                     self.consume()
-                    if self.peek_curr() == "=" {
+                    if self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::PLUS_EQUAL)
-                    } elif self.peek_curr() == "+" {
+                    } elif self.peek_byte(0_usize) == 43_u8 {
                         self.consume_and_push(TokenType::INCREMENT)
                     } else {
                         self.push_token(TokenType::PLUS)
                     }
                 }
-                "-" => {
+                LexerByte::Minus => {
                     self.consume()
-                    if self.peek_curr() == "=" {
+                    if self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::MINUS_EQUAL)
-                    } elif self.peek_curr() == ">" {
+                    } elif self.peek_byte(0_usize) == 62_u8 {
                         self.consume_and_push(TokenType::ARROW)
-                    } elif self.peek_curr() == "-" {
+                    } elif self.peek_byte(0_usize) == 45_u8 {
                         self.consume_and_push(TokenType::DECREMENT)
                     } else {
                         self.push_token(TokenType::MINUS)
                     }
                 }
-                "*" => {
+                LexerByte::Asterisk => {
                     self.consume()
-                    if self.peek_curr() == "*" {
+                    if self.peek_byte(0_usize) == 42_u8 {
                         self.consume()
-                        if self.peek_curr() == "=" {
+                        if self.peek_byte(0_usize) == 61_u8 {
                             self.consume_and_push(TokenType::POWER_EQUAL)
                         } else {
                             self.push_token(TokenType::POWER)
                         }
-                    } elif self.peek_curr() == "=" {
+                    } elif self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::ASTERISK_EQUAL)
                     } else {
                         self.push_token(TokenType::ASTERISK)
                     }
                 }
-                "/" => {
+                LexerByte::Slash => {
                     self.consume()
-                    if self.peek_curr() == "/" {
+                    if self.peek_byte(0_usize) == 47_u8 {
                         self.consume()
                         let mut comment_type = TokenType::ONE_LINE_COMMENT
-                        if self.peek_curr() == "/" {
+                        if self.peek_byte(0_usize) == 47_u8 {
                             self.consume()
                             comment_type = TokenType::DOC_COMMENT
-                        } elif self.peek_curr() == "!" {
+                        } elif self.peek_byte(0_usize) == 33_u8 {
                             self.consume()
                             comment_type = TokenType::MODULE_DOC_COMMENT
                         }
                         self.skip_one_line_comment()
                         self.push_token(comment_type)
-                    } elif self.peek_curr() == "*" {
+                    } elif self.peek_byte(0_usize) == 42_u8 {
                         self.consume()
                         self.skip_multi_line_comment_body()
 
@@ -149,150 +184,150 @@ impl for Lexer {
                             self.consume()
                             self.consume_and_push(TokenType::MULTI_LINE_COMMENT)
                         }
-                    } elif self.peek_curr() == "=" {
+                    } elif self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::SLASH_EQUAL)
                     } else {
                         self.push_token(TokenType::SLASH)
                     }
                 }
-                "%" => {
+                LexerByte::Percent => {
                     self.consume()
-                    if self.peek_curr() == "=" {
+                    if self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::PERCENT_EQUAL)
                     } else {
                         self.push_token(TokenType::PERCENT)
                     }
                 }
-                "<" => {
+                LexerByte::Less => {
                     self.consume()
-                    if self.peek_curr() == "<" {
+                    if self.peek_byte(0_usize) == 60_u8 {
                         self.consume()
-                        if self.peek_curr() == "=" {
+                        if self.peek_byte(0_usize) == 61_u8 {
                             self.consume_and_push(TokenType::LEFT_SHIFT_EQUAL)
                         } else {
                             self.push_token(TokenType::LEFT_SHIFT)
                         }
-                    } elif self.peek_curr() == "=" {
+                    } elif self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::LESS_EQUAL)
                     } else {
                         self.push_token(TokenType::LESS)
                     }
                 }
-                ">" => {
+                LexerByte::Greater => {
                     self.consume()
-                    if self.peek_curr() == ">" {
+                    if self.peek_byte(0_usize) == 62_u8 {
                         self.consume()
-                        if self.peek_curr() == "=" {
+                        if self.peek_byte(0_usize) == 61_u8 {
                             self.consume_and_push(TokenType::RIGHT_SHIFT_EQUAL)
                         } else {
                             self.push_token(TokenType::RIGHT_SHIFT)
                         }
-                    } elif self.peek_curr() == "=" {
+                    } elif self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::GREATER_EQUAL)
                     } else {
                         self.push_token(TokenType::GREATER)
                     }
                 }
-                "(" => {
+                LexerByte::LeftParen => {
                     self.consume_and_push(TokenType::LEFT_PAREN)
                 }
-                ")" => {
+                LexerByte::RightParen => {
                     self.consume_and_push(TokenType::RIGHT_PAREN)
                 }
-                "[" => {
+                LexerByte::LeftBracket => {
                     self.consume_and_push(TokenType::LEFT_BRACKET)
                 }
-                "]" => {
+                LexerByte::RightBracket => {
                     self.consume_and_push(TokenType::RIGHT_BRACKET)
                 }
-                "{" => {
+                LexerByte::LeftBrace => {
                     self.consume_and_push(TokenType::LEFT_BRACE)
                 }
-                "}" => {
+                LexerByte::RightBrace => {
                     self.consume_and_push(TokenType::RIGHT_BRACE)
                 }
-                ":" => {
+                LexerByte::Colon => {
                     self.consume()
-                    if self.peek_curr() == ":" {
+                    if self.peek_byte(0_usize) == 58_u8 {
                         self.consume_and_push(TokenType::SCOPE)
                     } else {
                         self.push_token(TokenType::COLON)
                     }
                 }
-                "." => {
+                LexerByte::Dot => {
                     self.consume_and_push(TokenType::DOT)
                 }
-                "," => {
+                LexerByte::Comma => {
                     self.consume_and_push(TokenType::COMMA)
                 }
-                ";" => {
+                LexerByte::Semicolon => {
                     self.consume_and_push(TokenType::SEMICOLON)
                 }
-                "=" => {
+                LexerByte::Equal => {
                     self.consume()
-                    if self.peek_curr() == "=" {
+                    if self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::EQUAL_EQUAL)
-                    } elif self.peek_curr() == ">" {
+                    } elif self.peek_byte(0_usize) == 62_u8 {
                         self.consume_and_push(TokenType::FAT_ARROW)
                     } else {
                         self.push_token(TokenType::ASSIGN)
                     }
                 }
-                "!" => {
+                LexerByte::Bang => {
                     self.consume()
-                    if self.peek_curr() == "=" {
+                    if self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::BANG_EQUAL)
                     } else {
                         self.push_token(TokenType::BANG)
                     }
                 }
-                "&" => {
+                LexerByte::Ampersand => {
                     self.consume()
-                    if self.peek_curr() == "&" {
+                    if self.peek_byte(0_usize) == 38_u8 {
                         self.consume_and_push(TokenType::AND_AND)
-                    } elif self.peek_curr() == "=" {
+                    } elif self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::AMPERSAND_EQUAL)
                     } else {
                         self.push_token(TokenType::AMPERSAND)
                     }
                 }
-                "|" => {
+                LexerByte::Pipe => {
                     self.consume()
-                    if self.peek_curr() == "|" {
+                    if self.peek_byte(0_usize) == 124_u8 {
                         self.consume_and_push(TokenType::PIPE_PIPE)
-                    } elif self.peek_curr() == "=" {
+                    } elif self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::PIPE_EQUAL)
                     } else {
                         self.push_token(TokenType::PIPE)
                     }
                 }
-                "^" => {
+                LexerByte::Caret => {
                     self.consume()
-                    if self.peek_curr() == "=" {
+                    if self.peek_byte(0_usize) == 61_u8 {
                         self.consume_and_push(TokenType::CARET_EQUAL)
                     } else {
                         self.push_token(TokenType::CARET)
                     }
                 }
-                "~" => {
+                LexerByte::Tilde => {
                     self.consume_and_push(TokenType::TILDE)
                 }
-                "?" => {
+                LexerByte::Question => {
                     self.consume_and_push(TokenType::QUESTION)
                 }
-                "#" => {
+                LexerByte::Hash => {
                     self.consume_and_push(TokenType::HASH)
                 }
-                "@" => {
+                LexerByte::At => {
                     self.consume_and_push(TokenType::AT)
                 }
-                "\"" => {
+                LexerByte::DoubleQuote => {
                     self.consume()
                     loop {
                         if self.is_at_end() {
                             break
                         }
-                        if self.peek_curr() == "\\" {
+                        if self.peek_byte(0_usize) == 92_u8 {
                             self.consume()
                             if self.is_at_end() {
                                 break
@@ -300,7 +335,7 @@ impl for Lexer {
                             self.consume()
                             continue
                         }
-                        if self.peek_curr() == "\"" {
+                        if self.peek_byte(0_usize) == 34_u8 {
                             break
                         }
                         self.consume()
@@ -311,14 +346,14 @@ impl for Lexer {
                         self.consume_and_push(TokenType::STRING)
                     }
                 }
-                "'" => {
+                LexerByte::Quote => {
                     self.consume_and_push(TokenType::QUOTE)
                 }
-                _ => {
-                    let curr_char = self.peek_curr()
-                    if is_digit_char(curr_char) {
+                LexerByte::Other => {
+                    let curr = self.peek_byte(0_usize)
+                    if is_digit_byte(curr) {
                         self.parse_number()
-                    } elif is_identifier_start_char(curr_char) {
+                    } elif is_identifier_start_byte(curr) {
                         self.parse_identifier()
                     } else {
                         self.consume()
@@ -334,31 +369,31 @@ impl for Lexer {
     fn parse_number(mut self) ->() {
         let mut is_float = false
 
-        if self.peek_curr() == "0" {
-            let prefix = self.peek_next()
-            if prefix == "x" || prefix == "X" || prefix == "b" || prefix == "B" ||
-            prefix == "o" || prefix == "O" {
+        if self.peek_byte(0_usize) == 48_u8 {
+            let prefix = self.peek_byte(1_usize)
+            if prefix == 120_u8 || prefix == 88_u8 || prefix == 98_u8 || prefix == 66_u8 ||
+            prefix == 111_u8 || prefix == 79_u8 {
                 self.consume()
                 self.consume()
                 let mut digits = 0_usize
-                let base = if prefix == "x" || prefix == "X" {
+                let base = if prefix == 120_u8 || prefix == 88_u8 {
                     16_u32
                 } else {
-                    if prefix == "b" || prefix == "B" {
+                    if prefix == 98_u8 || prefix == 66_u8 {
                         2_u32
                     } else {
                         8_u32
                     }
                 }
-                while radix_digit_value(self.peek_curr()) < base {
+                while radix_digit_byte_value(self.peek_byte(0_usize)) < base {
                     self.consume()
                     digits += 1_usize
                 }
                 // Consume an invalid alphanumeric tail as one token so the
                 // parser reports the malformed literal at its real source
                 // location instead of treating it as an adjacent identifier.
-                if digits == 0_usize || is_alnum_char(self.peek_curr()) {
-                    while is_alnum_char(self.peek_curr()) {
+                if digits == 0_usize || is_alnum_byte(self.peek_byte(0_usize)) {
+                    while is_alnum_byte(self.peek_byte(0_usize)) {
                         self.consume()
                     }
                     self.push_token(TokenType::UNKNOWN)
@@ -370,18 +405,18 @@ impl for Lexer {
         }
 
         loop {
-            if !is_digit_char(self.peek_curr()) {
+            if !is_digit_byte(self.peek_byte(0_usize)) {
                 break
             }
             self.consume()
         }
 
-        if self.peek_curr() == "." {
-            if is_digit_char(self.peek_next()) {
+        if self.peek_byte(0_usize) == 46_u8 {
+            if is_digit_byte(self.peek_byte(1_usize)) {
                 is_float = true
                 self.consume()
                 loop {
-                    if !is_digit_char(self.peek_curr()) {
+                    if !is_digit_byte(self.peek_byte(0_usize)) {
                         break
                     }
                     self.consume()
@@ -399,12 +434,12 @@ impl for Lexer {
 
     fn parse_identifier(mut self) ->() {
         loop {
-            let curr = self.peek_curr()
-            if is_alnum_char(curr) {
+            let curr = self.peek_byte(0_usize)
+            if is_alnum_byte(curr) {
                 self.consume()
                 continue
             }
-            if curr == "_" {
+            if curr == 95_u8 {
                 self.consume()
                 continue
             }
@@ -418,15 +453,15 @@ impl for Lexer {
     }
 
     fn consume(mut self) ->() {
-        let curr_char = self.peek_curr()
-        if curr_char == "" {
+        if self.is_at_end() {
             ret()
         }
+        let curr = self.peek_byte(0_usize)
 
         self.consumed = self.consumed + unsafe {
             encore_str_char_width_at_byte(self.program, self.consumed)
         }
-        if curr_char == "\n" || curr_char == "\r" {
+        if curr == 10_u8 || curr == 13_u8 {
             self.line += 1_usize
             self.column = 0_usize
         } else {
@@ -533,34 +568,113 @@ impl for Lexer {
         ret self.consumed >= self.program.byte_len()
     }
 
-    fn peek_curr(mut self) -> str {
-        ret self.peek_nth(0_usize)
+    fn peek_byte(mut self, offset: usize) -> u8 {
+        let index = self.consumed + offset
+        if index >= self.program.byte_len() {
+            ret 0_u8
+        }
+        ret self.program.byte_at(index)
     }
+}
 
-    fn peek_next(mut self) -> str {
-        ret self.peek_nth(1_usize)
+fn lexer_byte(value: u8) -> LexerByte {
+    if value == 32_u8 {
+        ret LexerByte::Space
     }
-
-    fn peek_nth(mut self, nth: usize) -> str {
-        let mut byte_index = self.consumed
-        let mut remaining = nth
-        while remaining > 0_usize {
-            let width = unsafe {
-                encore_str_char_width_at_byte(self.program, byte_index)
-            }
-            if width == 0_usize {
-                ret ""
-            }
-            byte_index = byte_index + width
-            remaining = remaining - 1_usize
-        }
-        if byte_index >= self.program.byte_len() {
-            ret ""
-        }
-        ret unsafe {
-            encore_str_char_at_byte(self.program, byte_index)
-        }
+    if value == 9_u8 {
+        ret LexerByte::Tab
     }
+    if value == 13_u8 {
+        ret LexerByte::CarriageReturn
+    }
+    if value == 10_u8 {
+        ret LexerByte::Newline
+    }
+    if value == 43_u8 {
+        ret LexerByte::Plus
+    }
+    if value == 45_u8 {
+        ret LexerByte::Minus
+    }
+    if value == 42_u8 {
+        ret LexerByte::Asterisk
+    }
+    if value == 47_u8 {
+        ret LexerByte::Slash
+    }
+    if value == 37_u8 {
+        ret LexerByte::Percent
+    }
+    if value == 60_u8 {
+        ret LexerByte::Less
+    }
+    if value == 62_u8 {
+        ret LexerByte::Greater
+    }
+    if value == 40_u8 {
+        ret LexerByte::LeftParen
+    }
+    if value == 41_u8 {
+        ret LexerByte::RightParen
+    }
+    if value == 91_u8 {
+        ret LexerByte::LeftBracket
+    }
+    if value == 93_u8 {
+        ret LexerByte::RightBracket
+    }
+    if value == 123_u8 {
+        ret LexerByte::LeftBrace
+    }
+    if value == 125_u8 {
+        ret LexerByte::RightBrace
+    }
+    if value == 58_u8 {
+        ret LexerByte::Colon
+    }
+    if value == 46_u8 {
+        ret LexerByte::Dot
+    }
+    if value == 44_u8 {
+        ret LexerByte::Comma
+    }
+    if value == 59_u8 {
+        ret LexerByte::Semicolon
+    }
+    if value == 61_u8 {
+        ret LexerByte::Equal
+    }
+    if value == 33_u8 {
+        ret LexerByte::Bang
+    }
+    if value == 38_u8 {
+        ret LexerByte::Ampersand
+    }
+    if value == 124_u8 {
+        ret LexerByte::Pipe
+    }
+    if value == 94_u8 {
+        ret LexerByte::Caret
+    }
+    if value == 126_u8 {
+        ret LexerByte::Tilde
+    }
+    if value == 63_u8 {
+        ret LexerByte::Question
+    }
+    if value == 35_u8 {
+        ret LexerByte::Hash
+    }
+    if value == 64_u8 {
+        ret LexerByte::At
+    }
+    if value == 34_u8 {
+        ret LexerByte::DoubleQuote
+    }
+    if value == 39_u8 {
+        ret LexerByte::Quote
+    }
+    ret LexerByte::Other
 }
 
 fn identifier_token_type(raw: str) -> TokenType {
@@ -602,75 +716,49 @@ fn identifier_token_type(raw: str) -> TokenType {
     }
 }
 
-fn is_digit_char(ch: str) -> bool {
-    if ch.len() != 1_usize {
-        ret false
-    }
-    let code = ch.byte_at(0_usize)
-    if code < 48_u8 {
-        ret false
-    }
-    if code > 57_u8 {
-        ret false
-    }
-    ret true
+fn is_digit_byte(value: u8) -> bool {
+    ret value >= 48_u8 && value <= 57_u8
 }
 
-fn radix_digit_value(ch: str) -> u32 {
-    if ch.len() != 1_usize {
-        ret 16_u32
+fn radix_digit_byte_value(value: u8) -> u32 {
+    if value >= 48_u8 && value <= 57_u8 {
+        ret(value - 48_u8) as u32
     }
-    let code = ch.byte_at(0_usize)
-    if code >= 48_u8 && code <= 57_u8 {
-        ret(code - 48_u8) as u32
+    if value >= 65_u8 && value <= 70_u8 {
+        ret(value - 65_u8) as u32 + 10_u32
     }
-    if code >= 65_u8 && code <= 70_u8 {
-        ret(code - 65_u8) as u32 + 10_u32
-    }
-    if code >= 97_u8 && code <= 102_u8 {
-        ret(code - 97_u8) as u32 + 10_u32
+    if value >= 97_u8 && value <= 102_u8 {
+        ret(value - 97_u8) as u32 + 10_u32
     }
     ret 16_u32
 }
 
-fn is_alpha_char(ch: str) -> bool {
-    if ch.len() != 1_usize {
-        ret false
-    }
-    let code = ch.byte_at(0_usize)
-    if code >= 65_u8 {
-        if code <= 90_u8 {
+fn is_alpha_byte(value: u8) -> bool {
+    if value >= 65_u8 {
+        if value <= 90_u8 {
             ret true
         }
     }
-    if code >= 97_u8 {
-        if code <= 122_u8 {
+    if value >= 97_u8 {
+        if value <= 122_u8 {
             ret true
         }
     }
     ret false
 }
 
-fn is_alnum_char(ch: str) -> bool {
-    if is_alpha_char(ch) {
+fn is_alnum_byte(value: u8) -> bool {
+    if is_alpha_byte(value) {
         ret true
     }
-    ret is_digit_char(ch)
+    ret is_digit_byte(value)
 }
 
-fn is_identifier_start_char(ch: str) -> bool {
-    if is_alpha_char(ch) {
+fn is_identifier_start_byte(value: u8) -> bool {
+    if is_alpha_byte(value) {
         ret true
     }
-    ret ch == "_"
-}
-
-fn is_newline_char(ch: str) -> bool {
-    if ch.len() != 1_usize {
-        ret false
-    }
-    let code = ch.byte_at(0_usize)
-    ret code == 10_u8 || code == 13_u8
+    ret value == 95_u8
 }
 
 #attr(test)
@@ -706,11 +794,4 @@ fn lexer_tracks_token_positions() -> bool {
         }
     }
     ret saw_main && saw_ret
-}
-
-fn is_double_quote_char(ch: str) -> bool {
-    if ch.len() != 1_usize {
-        ret false
-    }
-    ret ch.byte_at(0_usize) == 34_u8
 }

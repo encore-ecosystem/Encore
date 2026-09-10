@@ -11,6 +11,10 @@ import refrain::frontend::parser::Documentation
 import refrain::frontend::parser::Parser
 import refrain::frontend::parser::Statement
 
+extern fn encore_strset_new() -> usize
+extern fn encore_strset_insert(set: usize, value: str) -> bool
+extern fn encore_strset_free(set: usize) ->()
+
 /// Identifies how a labelled source range contributes to a diagnostic.
 pub enum DiagnosticLabelKind {
     Primary
@@ -201,6 +205,45 @@ impl for FrontendDocument {
             false
         }
     }
+
+    /// Creates a fast declaration outline for latency-sensitive editor requests.
+    pub fn outline(module_name: str, source: str) -> Self {
+        let mut lexer = Lexer::new()
+        let tokens = lexer.tokenize(source)
+        ret Self {
+            tokens,
+            Vec[Statement]::new(),
+            collect_module_documentation(tokens),
+            Vec[FrontendDiagnostic]::new(),
+            collect_symbols(tokens),
+            collect_callables(tokens),
+            DependencyGraph::from_tokens(module_name, tokens),
+            false
+        }
+    }
+
+    /// Restores a validated lightweight document from editor-owned metadata.
+    pub fn from_cached_lightweight(
+        source: str,
+        module_documentation: Option[Documentation],
+        diagnostics: Vec[FrontendDiagnostic],
+        symbols: Vec[FrontendSymbol],
+        callables: Vec[FrontendCallable],
+        dependencies: DependencyGraph,
+        parsed: bool,
+    ) -> Self {
+        let mut lexer = Lexer::new()
+        ret Self {
+            lexer.tokenize(source),
+            Vec[Statement]::new(),
+            module_documentation,
+            diagnostics,
+            symbols,
+            callables,
+            dependencies,
+            parsed
+        }
+    }
 }
 
 /// Fully analyzes an anonymous source document, including parsing its AST.
@@ -211,6 +254,83 @@ pub fn analyze_source(source: str) -> FrontendDocument {
 /// Analyzes an anonymous document without invoking the strict parser.
 pub fn analyze_source_lightweight(source: str) -> FrontendDocument {
     ret analyze_module_lightweight("document", source)
+}
+
+/// Tokenizes source for cursor-based tooling and exposes expressions embedded
+/// in f-strings at their original source coordinates.
+pub fn tooling_tokens(source: str) -> Vec[Token] {
+    let mut lexer = Lexer::new()
+    let tokens = lexer.tokenize(source)
+    ret tooling_tokens_from_tokens(tokens)
+}
+
+/// Expands embedded expressions without retokenizing an existing document.
+pub fn tooling_tokens_from_tokens(tokens: Vec[Token]) -> Vec[Token] {
+    let mut out = Vec[Token]::new()
+    let mut index = 0_usize
+    while index < tokens.len() {
+        match tokens.get(index) {
+            Option[Token]::Some(token) => {
+                out.push(token)
+                if token.type == TokenType::IDENTIFIER && token.value == "f" {
+                    match tokens.get(index + 1_usize) {
+                        Option[Token]::Some(string_token) => {
+                            if string_token.type == TokenType::STRING {
+                                push_fstring_tooling_tokens(out, string_token)
+                            }
+                        }
+                        Option[Token]::None => {
+                        }
+                    }
+                }
+            }
+            Option[Token]::None => {
+            }
+        }
+        index += 1_usize
+    }
+    ret out
+}
+
+fn push_fstring_tooling_tokens(out: mut Vec[Token], string_token: Token) ->() {
+    if string_token.value.len() < 2_usize {
+        ret()
+    }
+    let body = string_token.value.slice(1_usize, string_token.value.len() - 2_usize)
+    let mut cursor = 0_usize
+    while cursor < body.len() {
+        if body.slice(cursor, 1_usize) != "{" {
+            cursor += 1_usize
+            continue
+        }
+        let mut end = cursor + 1_usize
+        while end < body.len() && body.slice(end, 1_usize) != "}" {
+            end += 1_usize
+        }
+        if end >= body.len() {
+            ret()
+        }
+        let mut expression = body.slice(cursor + 1_usize, end - cursor - 1_usize)
+        let mut expression_column = string_token.column + cursor + 2_usize
+        if expression.len() > 0_usize && expression.slice(0_usize, 1_usize) == "#" {
+            expression = expression.slice(1_usize, expression.len() - 1_usize)
+            expression_column += 1_usize
+        }
+        let mut nested_lexer = Lexer::new()
+        for nested in nested_lexer.tokenize(expression) {
+            if nested.type != TokenType::EOF {
+                let line = string_token.line + nested.line
+                let column = if nested.line == 0_usize {
+                    expression_column + nested.column
+                } else {
+                    nested.column
+                }
+                out.push(Token::new(nested.type, nested.value, line, column))
+            }
+        }
+        cursor = end + 1_usize
+    }
+    ret()
 }
 
 /// Collects tolerant diagnostics, symbols, callables, and dependencies.
@@ -525,7 +645,7 @@ fn collect_structural_diagnostics(tokens: Vec[Token]) -> Vec[FrontendDiagnostic]
 
 fn collect_declaration_diagnostics(tokens: Vec[Token]) -> Vec[FrontendDiagnostic] {
     let mut out = Vec[FrontendDiagnostic]::new()
-    let mut function_names = Vec[str]::new()
+    let function_names = encore_strset_new()
     let mut brace_depth = 0_i32
     let mut pending_attribute = false
     let mut index = 0_usize
@@ -542,11 +662,9 @@ fn collect_declaration_diagnostics(tokens: Vec[Token]) -> Vec[FrontendDiagnostic
                     match next_significant_token(tokens, index + 1_usize) {
                         Option[Token]::Some(name) => {
                             if name.type == TokenType::IDENTIFIER && !pending_attribute {
-                                if contains_name(function_names, name.value) {
+                                if !encore_strset_insert(function_names, name.value) {
                                     out.push(FrontendDiagnostic::new(1_usize, "duplicate-function", "duplicate function declaration '"
                                             + name.value + "'", name.line, name.column, name.value.char_len(),))
-                                } else {
-                                    function_names.push(name.value)
                                 }
                             }
                         }
@@ -561,6 +679,7 @@ fn collect_declaration_diagnostics(tokens: Vec[Token]) -> Vec[FrontendDiagnostic
         }
         index += 1_usize
     }
+    encore_strset_free(function_names)
     ret out
 }
 
@@ -580,15 +699,6 @@ fn next_significant_token(tokens: Vec[Token], start: usize) -> Option[Token] {
         index += 1_usize
     }
     ret Option[Token]::None
-}
-
-fn contains_name(names: Vec[str], needle: str) -> bool {
-    for name in names {
-        if name == needle {
-            ret true
-        }
-    }
-    ret false
 }
 
 fn last_token(tokens: Vec[Token]) -> Option[Token] {
@@ -686,9 +796,10 @@ fn collect_callables(tokens: Vec[Token]) -> Vec[FrontendCallable] {
 }
 
 fn push_function_callable(out: mut Vec[FrontendCallable], tokens: Vec[Token], fn_index: usize) ->() {
-    match next_identifier_token(tokens, fn_index + 1_usize) {
-        Option[Token]::Some(name_token) => {
-            let name_index = first_token_index(tokens, name_token)
+    match next_identifier_token_index(tokens, fn_index + 1_usize) {
+        Option[usize]::Some(name_index) => {
+            let name_token = tokens.get(name_index).unwrap_or(Token::new(TokenType::IDENTIFIER, "", 0_usize,
+                    0_usize,))
             let params = collect_function_params(tokens, name_index + 1_usize)
             let ret_type = collect_function_return_type(tokens, name_index + 1_usize)
             out.push(FrontendCallable::new(name_token.value, params, ret_type, name_token.line, name_token.column,
@@ -725,7 +836,7 @@ fn collect_function_params(tokens: Vec[Token], start: usize) -> Vec[str] {
                     } elif depth == 1_i32 {
                         if token.type == TokenType::IDENTIFIER {
                             if next_token_is(tokens, index + 1_usize, TokenType::COLON) {
-                                params.push(token.value)
+                                params.push(token.value + ": " + collect_parameter_type(tokens, index + 2_usize))
                             }
                         }
                     }
@@ -738,6 +849,38 @@ fn collect_function_params(tokens: Vec[Token], start: usize) -> Vec[str] {
     }
 
     ret params
+}
+
+fn collect_parameter_type(tokens: Vec[Token], start: usize) -> str {
+    let mut out = ""
+    let mut index = start
+    let mut bracket_depth = 0_i32
+    let mut paren_depth = 0_i32
+    while index < tokens.len() {
+        match tokens.get(index) {
+            Option[Token]::Some(token) => {
+                if bracket_depth == 0_i32 && paren_depth == 0_i32 {
+                    if token.type == TokenType::COMMA || token.type == TokenType::RIGHT_PAREN {
+                        break
+                    }
+                }
+                if token.type == TokenType::LEFT_BRACKET {
+                    bracket_depth += 1_i32
+                } elif token.type == TokenType::RIGHT_BRACKET {
+                    bracket_depth -= 1_i32
+                } elif token.type == TokenType::LEFT_PAREN {
+                    paren_depth += 1_i32
+                } elif token.type == TokenType::RIGHT_PAREN {
+                    paren_depth -= 1_i32
+                }
+                out += token.value
+            }
+            Option[Token]::None => {
+            }
+        }
+        index += 1_usize
+    }
+    ret out
 }
 
 fn collect_function_return_type(tokens: Vec[Token], start: usize) -> Option[str] {
@@ -840,10 +983,11 @@ fn push_next_identifier_symbol(out: mut Vec[FrontendSymbol], tokens: Vec[Token],
 
 fn impl_symbol_name(tokens: Vec[Token], start: usize) -> str {
     let mut name = "impl"
-    match next_identifier_token(tokens, start + 1_usize) {
-        Option[Token]::Some(first) => {
+    match next_identifier_token_index(tokens, start + 1_usize) {
+        Option[usize]::Some(first_index) => {
+            let first = tokens.get(first_index).unwrap_or(Token::new(TokenType::IDENTIFIER, "", 0_usize, 0_usize))
             if first.value == "for" {
-                match next_identifier_token(tokens, first_token_index(tokens, first) + 1_usize) {
+                match next_identifier_token(tokens, first_index + 1_usize) {
                     Option[Token]::Some(target) => {
                         name = "impl " + target.value
                     }
@@ -935,36 +1079,32 @@ fn symbol_declaration_starts(token_type: TokenType) -> bool {
 }
 
 fn next_identifier_token(tokens: Vec[Token], start: usize) -> Option[Token] {
-    let mut index = start
-    while index < tokens.len() {
-        match tokens.get(index) {
-            Option[Token]::Some(token) => {
-                if token.type == TokenType::IDENTIFIER {
+    match next_identifier_token_index(tokens, start) {
+        Option[usize]::Some(index) => {
+            match tokens.get(index) {
+                Option[Token]::Some(token) => {
+                    if token.type == TokenType::KW_FOR {
+                        ret Option[Token]::Some(Token::new(TokenType::IDENTIFIER, "for", token.line, token.column))
+                    }
                     ret Option[Token]::Some(token)
                 }
-                if token.type == TokenType::KW_FOR {
-                    ret Option[Token]::Some(Token::new(TokenType::IDENTIFIER, "for", token.line, token.column))
+                Option[Token]::None => {
                 }
             }
-            Option[Token]::None => {
-            }
         }
-        index += 1_usize
+        Option[usize]::None => {
+        }
     }
     ret Option[Token]::None
 }
 
-fn first_token_index(tokens: Vec[Token], needle: Token) -> usize {
-    let mut index = 0_usize
+fn next_identifier_token_index(tokens: Vec[Token], start: usize) -> Option[usize] {
+    let mut index = start
     while index < tokens.len() {
         match tokens.get(index) {
             Option[Token]::Some(token) => {
-                if token.line == needle.line {
-                    if token.column == needle.column {
-                        if token.value == needle.value {
-                            ret index
-                        }
-                    }
+                if token.type == TokenType::IDENTIFIER || token.type == TokenType::KW_FOR {
+                    ret Option[usize]::Some(index)
                 }
             }
             Option[Token]::None => {
@@ -972,5 +1112,5 @@ fn first_token_index(tokens: Vec[Token], needle: Token) -> usize {
         }
         index += 1_usize
     }
-    ret 0_usize
+    ret Option[usize]::None
 }

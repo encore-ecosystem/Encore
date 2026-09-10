@@ -1,0 +1,43 @@
+//! Checks deterministic staging archives and preservation of selected file bytes.
+
+import core::vec::Vec
+import refrain::modes::publish::create_staged_publish_archive
+import std::os::{mkdir_all, write_file, read_file, file_sha256}
+import std::path::Path
+import std::process::run_args
+
+fn main() -> u32 {
+    let work = Path::new("target/publish-archive-test").resolve()
+    let stage = work.join("stage with spaces")
+    mkdir_all(stage.as_str())
+    write_file(stage.join("encore.toml").as_str(), "[project]\nname = \"sample\"\nversion = \"0.0.0\"\n")
+    write_file(stage.join("payload.txt").as_str(), "first\r\nsecond\r\n")
+    write_file(stage.join(".gitattributes").as_str(), "payload.txt text eol=lf export-ignore\n")
+    let archive = work.join("sample.tar.gz")
+    if !create_staged_publish_archive(work, stage, archive) {
+        ret 1_u32
+    }
+    let first = file_sha256(archive.as_str())
+    if !create_staged_publish_archive(work, stage, archive) {
+        ret 2_u32
+    }
+    if first != file_sha256(archive.as_str()) {
+        ret 3_u32
+    }
+    let unpacked = work.join("unpacked")
+    mkdir_all(unpacked.as_str())
+    if run_args("tar", vec!["-xzf", archive.as_str(), "-C", unpacked.as_str()]) != 0_i32 {
+        ret 4_u32
+    }
+    if read_file(unpacked.join("payload.txt").as_str()) != "first\r\nsecond\r\n" {
+        ret 5_u32
+    }
+    write_file(stage.join("payload.txt").as_str(), "changed\n")
+    if !create_staged_publish_archive(work, stage, archive) {
+        ret 6_u32
+    }
+    if first == file_sha256(archive.as_str()) {
+        ret 7_u32
+    }
+    ret 0_u32
+}

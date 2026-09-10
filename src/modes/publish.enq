@@ -1,41 +1,19 @@
 //! Implements reproducible, reviewed package publication.
 
+import argparse::{process_arg_count, process_arg}
 import core::fmt::Debug
 import core::option::Option
 import core::result::Result
 import core::vec::Vec
 import json::{Json, ParseError, field, parse, stringify}
 import std::io::{eprintln, println}
-import argparse::{process_arg_count, process_arg}
-import std::os::{
-    file_exists,
-    file_sha256,
-    mkdir_all,
-    read_file,
-    remove_dir_all,
-    remove_file,
-    write_file,
-}
+import std::os::{file_exists, file_sha256, mkdir_all, read_file, remove_dir_all, remove_file, write_file,}
 import std::path::Path
 import std::process::{run_args, run_args_capture}
 
-import refrain::project::manifest::{
-    ProjectManifest,
-    project_manifest_compiler_requirement,
-    project_manifest_dependencies,
-    project_manifest_name,
-    project_manifest_publish_exclude,
-    project_manifest_publish_include,
-    project_manifest_repository,
-    project_manifest_version,
-    read_project_manifest,
-}
-import refrain::project::{
-    dependency_base_reference,
-    registry_version_matches,
-    registry_version_requirement_valid,
-}
-import refrain::version::compiler_version
+import refrain::project::manifest::{ProjectManifest, project_manifest_compiler_requirement, project_manifest_dependencies, project_manifest_name, project_manifest_publish_exclude, project_manifest_publish_include, project_manifest_repository, project_manifest_source_with_dependencies, project_manifest_version, read_project_manifest,}
+import refrain::project::{dependency_base_reference, registry_version_matches, registry_version_requirement_valid,}
+import refrain::version::{compiler_registry_epoch, compiler_release_name, compiler_version}
 
 struct PublishContext {
     package_root: Path
@@ -45,6 +23,8 @@ struct PublishContext {
     source_commit: str
     package_name: str
     version: str
+    release_name: str
+    release: str
     compiler_requirement: str
     tag: str
     archive: Path
@@ -55,12 +35,16 @@ struct PublishContext {
 /// Validates, packages, and optionally publishes the current package.
 pub fn native_publish() -> u32 {
     let dry_run = has_switch("--dry-run")
+    let release_only = has_switch("--release-only")
+    let release_name = option_value("--release-name", compiler_release_name())
     let package_root = Path::new(".").resolve()
     let manifest = read_project_manifest(package_root)
-    let prepared = prepare_publish(package_root, manifest)
-    if prepared.package_name == "" { ret 1_u32 }
+    let prepared = prepare_publish(package_root, manifest, release_name)
+    if prepared.package_name == "" {
+        ret 1_u32
+    }
 
-    println("Package:    " + prepared.package_name + " " + prepared.version)
+    println("Package:    " + prepared.package_name + " " + prepared.release)
     println("Repository: " + prepared.repository_slug)
     println("Commit:     " + prepared.source_commit)
     println("Tag:        " + prepared.tag)
@@ -72,21 +56,39 @@ pub fn native_publish() -> u32 {
         ret 0_u32
     }
 
-    if !github_ready(prepared) { ret 1_u32 }
-    if !create_package_release(prepared) { ret 1_u32 }
-    if !open_index_pull_request(prepared) { ret 1_u32 }
+    if !github_ready(prepared) {
+        ret 1_u32
+    }
+    if !create_package_release(prepared) {
+        ret 1_u32
+    }
+    if release_only {
+        println("Package release published; index metadata was not changed.")
+        ret 0_u32
+    }
+    if !open_index_pull_request(prepared) {
+        ret 1_u32
+    }
     println("Publication submitted for review.")
     ret 0_u32
 }
 
-fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishContext {
+fn prepare_publish(package_root: Path, manifest: ProjectManifest, release_name: str) -> PublishContext {
     let empty = empty_context(package_root)
     let name = project_manifest_name(manifest)
     let version = project_manifest_version(manifest)
     let repository = project_manifest_repository(manifest)
     let compiler_requirement = project_manifest_compiler_requirement(manifest)
-    if name == "" || version == "" { publish_error("manifest requires package name and version") ret empty }
-    if !registry_version_matches(version, version) { publish_error("package version must be valid SemVer: " + version) ret empty }
+    if name == "" || version == "" {
+        publish_error("manifest requires package name and version") ret empty
+    }
+    if !registry_version_matches(version, version) {
+        publish_error("package version must be valid SemVer: " + version) ret empty
+    }
+    if !valid_release_name(release_name) {
+        publish_error("release name must contain lowercase letters, digits, and hyphens") ret empty
+    }
+    let release = version + "-" + release_name
     if repository_slug(repository) == "" {
         publish_error("[project].repository must be a public GitHub repository URL")
         ret empty
@@ -99,10 +101,24 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishCont
         publish_error("compiler " + compiler_version() + " does not satisfy package requirement " + compiler_requirement)
         ret empty
     }
+    let mut published_dependencies = Vec[str]::new()
+    let mut rewrite_dependencies = false
     for dependency in project_manifest_dependencies(manifest) {
-        if starts_with(dependency_base_reference(dependency), "path@") {
-            publish_error("published packages cannot contain path@ dependencies: " + dependency)
-            ret empty
+        let base = dependency_base_reference(dependency)
+        if starts_with(base, "path@") {
+            let dependency_root = package_root.join(base.slice(5_usize, base.len() - 5_usize)).resolve()
+            let dependency_manifest = read_project_manifest(dependency_root)
+            let dependency_name = project_manifest_name(dependency_manifest)
+            let dependency_version = project_manifest_version(dependency_manifest)
+            if dependency_name == "" || dependency_version == "" || !registry_version_matches(dependency_version, dependency_version) {
+                publish_error("path dependency has no publishable package identity: " + dependency)
+                ret empty
+            }
+            let suffix = dependency.slice(base.len(), dependency.len() - base.len())
+            published_dependencies.push("index@" + dependency_name + "@" + dependency_version + suffix)
+            rewrite_dependencies = true
+        } else {
+            published_dependencies.push(dependency)
         }
     }
 
@@ -114,10 +130,16 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishCont
         "git",
         args4("-C", package_root.as_str(), "rev-parse", "--show-toplevel"),
     )
-    if repository_root_text == "" { publish_error("package is not inside a Git repository") ret empty }
+    if repository_root_text == "" {
+        publish_error("package is not inside a Git repository") ret empty
+    }
     let repository_root = Path::new(first_line(repository_root_text)).resolve()
     let source_subdir = relative_path(repository_root, package_root)
-    let target_path = if source_subdir == "" { "target" } else { source_subdir + "/target" }
+    let target_path = if source_subdir == "" {
+        "target"
+    } else {
+        source_subdir + "/target"
+    }
     let mut status_args = Vec[str]::new()
     status_args.push("-C")
     status_args.push(repository_root.as_str())
@@ -132,35 +154,39 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishCont
         "git",
         status_args,
     )
-    if status != "" { publish_error("Git worktree must be clean before publication") ret empty }
+    if status != "" {
+        publish_error("Git worktree must be clean before publication") ret empty
+    }
     let commit = first_line(capture(
-        work,
-        "commit.txt",
-        "git",
-        args4("-C", repository_root.as_str(), "rev-parse", "HEAD"),
-    ))
+            work,
+            "commit.txt",
+            "git",
+            args4("-C", repository_root.as_str(), "rev-parse", "HEAD"),
+        ))
     let upstream = first_line(capture(
-        work,
-        "upstream.txt",
-        "git",
-        args4("-C", repository_root.as_str(), "rev-parse", "@{upstream}"),
-    ))
+            work,
+            "upstream.txt",
+            "git",
+            args4("-C", repository_root.as_str(), "rev-parse", "@{upstream}"),
+        ))
     if commit == "" || upstream == "" || commit != upstream {
         publish_error("HEAD must be pushed and equal to its upstream branch")
         ret empty
     }
     let remote = first_line(capture(
-        work,
-        "remote.txt",
-        "git",
-        args5("-C", repository_root.as_str(), "remote", "get-url", "origin"),
-    ))
+            work,
+            "remote.txt",
+            "git",
+            args5("-C", repository_root.as_str(), "remote", "get-url", "origin"),
+        ))
     let slug = repository_slug(repository)
     if repository_slug(remote) != slug {
         publish_error("manifest repository '" + slug + "' does not match Git origin '" + repository_slug(remote) + "'")
         ret empty
     }
-    if !verify_package(package_root, repository_root) { ret empty }
+    if !verify_package(package_root, repository_root) {
+        ret empty
+    }
 
     let files = publish_files(repository_root, source_subdir, manifest, work)
     if !contains_file(files, "encore.toml") || !contains_source_file(files) {
@@ -169,7 +195,11 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishCont
     }
     let archive = work.join(name + "-" + version + ".tar.gz")
     remove_file(archive.as_str())
-    let tree = if source_subdir == "" { "HEAD" } else { "HEAD:" + source_subdir }
+    let tree = if source_subdir == "" {
+        "HEAD"
+    } else {
+        "HEAD:" + source_subdir
+    }
     let mut archive_args = Vec[str]::new()
     archive_args.push("-C")
     archive_args.push(repository_root.as_str())
@@ -177,17 +207,32 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishCont
     archive_args.push("--format=tar.gz")
     archive_args.push("--output=" + archive.as_str())
     archive_args.push(tree)
-    for file in files { archive_args.push(file) }
+    for file in files {
+        archive_args.push(file)
+    }
     if run_args("git", archive_args) != 0_i32 || !file_exists(archive.as_str()) {
         publish_error("unable to create package archive")
         ret empty
     }
-    if !verify_archive(work, archive) { ret empty }
+    // Validate before staging: extraction must never follow repository links.
+    if !verify_archive(work, archive) {
+        ret empty
+    }
+    if rewrite_dependencies {
+        if !rewrite_archive_dependencies(work, archive, manifest, published_dependencies) {
+            ret empty
+        }
+        if !verify_archive(work, archive) {
+            ret empty
+        }
+    }
     let checksum = file_sha256(archive.as_str())
-    if checksum.len() != 64_usize { publish_error("unable to hash package archive") ret empty }
-    let tag = name + "-v" + version
-    let metadata = publish_metadata(name, version, slug, source_subdir, commit, compiler_requirement, archive, checksum, tag)
-    ret PublishContext{
+    if checksum.len() != 64_usize {
+        publish_error("unable to hash package archive") ret empty
+    }
+    let tag = name + "-v" + release
+    let metadata = publish_metadata(name, version, release_name, slug, source_subdir, commit, compiler_requirement, archive, checksum, tag)
+    ret PublishContext {
         package_root,
         repository_root,
         slug,
@@ -195,6 +240,8 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishCont
         commit,
         name,
         version,
+        release_name,
+        release,
         compiler_requirement,
         tag,
         archive,
@@ -203,8 +250,89 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest) -> PublishCont
     }
 }
 
+fn rewrite_archive_dependencies(work: Path, archive: Path, manifest: ProjectManifest, dependencies: Vec[str]) -> bool {
+    let stage = work.join("archive-stage")
+    if file_exists(stage.as_str()) {
+        remove_dir_all(stage.as_str())
+    }
+    mkdir_all(stage.as_str())
+    let mut extract_args = Vec[str]::new()
+    extract_args.push("-xzf")
+    extract_args.push(archive.as_str())
+    extract_args.push("-C")
+    extract_args.push(stage.as_str())
+    if run_args("tar", extract_args) != 0_i32 {
+        publish_error("unable to stage package archive")
+        ret false
+    }
+    if write_file(stage.join("encore.toml").as_str(), project_manifest_source_with_dependencies(manifest, dependencies)) != 0_i32 {
+        publish_error("unable to rewrite path dependencies for publication")
+        ret false
+    }
+    remove_file(archive.as_str())
+    if !create_staged_publish_archive(work, stage, archive) {
+        publish_error("unable to create rewritten package archive")
+        ret false
+    }
+    ret true
+}
+
+/// Archives validated staging files without requiring GNU tar or modifying source Git state.
+pub fn create_staged_publish_archive(work: Path, stage: Path, archive: Path) -> bool {
+    let repository = work.join("archive-git")
+    if file_exists(repository.as_str()) {
+        remove_dir_all(repository.as_str())
+    }
+    if run_args("git", args5("init", "--bare", "--template=", "--object-format=sha1", repository.as_str())) != 0_i32 {
+        ret false
+    }
+    // Staged bytes are already selected and validated. Do not apply user filters,
+    // newline conversions, or a second round of export attributes to them.
+    mkdir_all(repository.join("info").as_str())
+    if write_file(repository.join("info").join("attributes").as_str(), "* -text -filter -ident -export-ignore -export-subst\n") != 0_i32 {
+        ret false
+    }
+    let mut add = staging_git_args(repository, stage)
+    add.push("add") add.push("--force") add.push("--all") add.push("--") add.push(".")
+    if run_args("git", add) != 0_i32 {
+        ret false
+    }
+    let mut tree_args = staging_git_args(repository, stage)
+    tree_args.push("write-tree")
+    let tree = capture(work, "archive-tree.txt", "git", tree_args)
+    if tree.len() != 40_usize {
+        ret false
+    }
+    let commit_file = work.join("archive-commit.txt")
+    let commit_source = "tree " + tree + "\nauthor Encore <publish@encore.invalid> 0 +0000\ncommitter Encore <publish@encore.invalid> 0 +0000\n\nEncore package\n"
+    if write_file(commit_file.as_str(), commit_source) != 0_i32 {
+        ret false
+    }
+    let mut commit_args = staging_git_args(repository, stage)
+    commit_args.push("hash-object") commit_args.push("-t") commit_args.push("commit")
+    commit_args.push("-w") commit_args.push(commit_file.as_str())
+    let commit = capture(work, "archive-commit-id.txt", "git", commit_args)
+    if commit.len() != 40_usize {
+        ret false
+    }
+    let mut archive_args = staging_git_args(repository, stage)
+    archive_args.push("archive") archive_args.push("--format=tar.gz")
+    archive_args.push("--output=" + archive.as_str()) archive_args.push(commit)
+    ret run_args("git", archive_args) == 0_i32 && file_exists(archive.as_str())
+}
+
+fn staging_git_args(repository: Path, stage: Path) -> Vec[str] {
+    ret vec!["--git-dir=" + repository.as_str(), "--work-tree=" + stage.as_str(),
+        "-C", stage.as_str(), "-c", "core.autocrlf=false", "-c", "core.filemode=true",
+        "-c", "tar.umask=0022"]
+}
+
 fn publish_files(repository_root: Path, source_subdir: str, manifest: ProjectManifest, work: Path) -> Vec[str] {
-    let pathspec = if source_subdir == "" { "." } else { source_subdir }
+    let pathspec = if source_subdir == "" {
+        "."
+    } else {
+        source_subdir
+    }
     let tracked = capture(
         work,
         "tracked-files.txt",
@@ -213,28 +341,44 @@ fn publish_files(repository_root: Path, source_subdir: str, manifest: ProjectMan
     )
     let mut includes = project_manifest_publish_include(manifest)
     let excludes = project_manifest_publish_exclude(manifest)
-    let ignore_path = if source_subdir == "" { ".encoreignore" } else { source_subdir + "/.encoreignore" }
+    let ignore_path = if source_subdir == "" {
+        ".encoreignore"
+    } else {
+        source_subdir + "/.encoreignore"
+    }
     if file_exists(repository_root.join(ignore_path).as_str()) {
         for pattern in lines(read_file(repository_root.join(ignore_path).as_str())) {
             let cleaned = trim(pattern)
-            if cleaned != "" && !starts_with(cleaned, "#") { includes.push("!" + cleaned) }
+            if cleaned != "" && !starts_with(cleaned, "#") {
+                includes.push("!" + cleaned)
+            }
         }
     }
     let mut out = Vec[str]::new()
     for repository_file in lines(tracked) {
         let relative = strip_source_prefix(repository_file, source_subdir)
-        if relative == "" || path_forbidden(relative) { continue }
+        if relative == "" || path_forbidden(relative) {
+            continue
+        }
         let mut allowed = project_manifest_publish_include(manifest).len() == 0_usize
         for pattern in project_manifest_publish_include(manifest) {
-            if glob_matches(pattern, relative) { allowed = true }
+            if glob_matches(pattern, relative) {
+                allowed = true
+            }
         }
         for pattern in includes {
-            if starts_with(pattern, "!") && glob_matches(pattern.slice(1_usize, pattern.len() - 1_usize), relative) { allowed = false }
+            if starts_with(pattern, "!") && glob_matches(pattern.slice(1_usize, pattern.len() - 1_usize), relative) {
+                allowed = false
+            }
         }
         for pattern in excludes {
-            if glob_matches(pattern, relative) { allowed = false }
+            if glob_matches(pattern, relative) {
+                allowed = false
+            }
         }
-        if allowed && !contains_file(out, relative) { out.push(relative) }
+        if allowed && !contains_file(out, relative) {
+            out.push(relative)
+        }
     }
     ret out
 }
@@ -249,7 +393,7 @@ fn verify_archive(work: Path, archive: Path) -> bool {
         ret false
     }
     for path in lines(read_file(listing.as_str())) {
-        if starts_with(path, "/") || starts_with(path, "../") || contains(path, "/../") {
+        if starts_with(path, "/") || path == ".." || starts_with(path, "../") || contains(path, "/../") || ends_with(path, "/..") {
             publish_error("unsafe archive path: " + path)
             ret false
         }
@@ -278,24 +422,26 @@ fn github_ready(context: PublishContext) -> bool {
     let mut auth = Vec[str]::new()
     auth.push("auth")
     auth.push("status")
-    if run_args("gh", auth) != 0_i32 { publish_error("authenticate with gh auth login before publishing") ret false }
+    if run_args("gh", auth) != 0_i32 {
+        publish_error("authenticate with gh auth login before publishing") ret false
+    }
     ret true
 }
 
 fn create_package_release(context: PublishContext) -> bool {
     let work = context.package_root.join("target").join("publish")
     let local_tag = first_line(capture(
-        work,
-        "local-tag.txt",
-        "git",
-        args6("-C", context.repository_root.as_str(), "rev-list", "-n", "1", context.tag),
-    ))
+            work,
+            "local-tag.txt",
+            "git",
+            args6("-C", context.repository_root.as_str(), "rev-list", "-n", "1", context.tag),
+        ))
     let remote_tag = first_column(capture(
-        work,
-        "remote-tag.txt",
-        "git",
-        args3("ls-remote", "origin", "refs/tags/" + context.tag + "^{}"),
-    ))
+            work,
+            "remote-tag.txt",
+            "git",
+            args3("ls-remote", "origin", "refs/tags/" + context.tag + "^{}"),
+        ))
     if local_tag != "" && local_tag != context.source_commit {
         publish_error("local tag " + context.tag + " points to a different commit")
         ret false
@@ -312,8 +458,10 @@ fn create_package_release(context: PublishContext) -> bool {
         tag_args.push("-a")
         tag_args.push(context.tag)
         tag_args.push("-m")
-        tag_args.push(context.package_name + " " + context.version)
-        if run_args("git", tag_args) != 0_i32 { publish_error("unable to create package tag") ret false }
+        tag_args.push(context.package_name + " " + context.release)
+        if run_args("git", tag_args) != 0_i32 {
+            publish_error("unable to create package tag") ret false
+        }
     }
     if remote_tag == "" {
         let mut push_args = Vec[str]::new()
@@ -322,7 +470,9 @@ fn create_package_release(context: PublishContext) -> bool {
         push_args.push("push")
         push_args.push("origin")
         push_args.push("refs/tags/" + context.tag)
-        if run_args("git", push_args) != 0_i32 { publish_error("unable to push package tag") ret false }
+        if run_args("git", push_args) != 0_i32 {
+            publish_error("unable to push package tag") ret false
+        }
     }
     if release_asset_matches(context, work) {
         println("Reusing matching GitHub Release " + context.tag)
@@ -346,14 +496,18 @@ fn create_package_release(context: PublishContext) -> bool {
     release_args.push("--repo")
     release_args.push(context.repository_slug)
     release_args.push("--title")
-    release_args.push(context.package_name + " " + context.version)
-    if run_args("gh", release_args) != 0_i32 { publish_error("unable to create GitHub Release") ret false }
+    release_args.push(context.package_name + " " + context.release)
+    if run_args("gh", release_args) != 0_i32 {
+        publish_error("unable to create GitHub Release") ret false
+    }
     ret true
 }
 
 fn release_asset_matches(context: PublishContext, work: Path) -> bool {
     let destination = work.join("remote-release")
-    if file_exists(destination.as_str()) { remove_dir_all(destination.as_str()) }
+    if file_exists(destination.as_str()) {
+        remove_dir_all(destination.as_str())
+    }
     mkdir_all(destination.as_str())
     let mut args = Vec[str]::new()
     args.push("release")
@@ -365,7 +519,9 @@ fn release_asset_matches(context: PublishContext, work: Path) -> bool {
     args.push(context.package_name + "-" + context.version + ".tar.gz")
     args.push("--dir")
     args.push(destination.as_str())
-    if run_args("gh", args) != 0_i32 { ret false }
+    if run_args("gh", args) != 0_i32 {
+        ret false
+    }
     let asset = destination.join(context.package_name + "-" + context.version + ".tar.gz")
     ret file_exists(asset.as_str()) && file_sha256(asset.as_str()) == context.checksum
 }
@@ -373,7 +529,9 @@ fn release_asset_matches(context: PublishContext, work: Path) -> bool {
 fn open_index_pull_request(context: PublishContext) -> bool {
     let work = context.package_root.join("target").join("publish")
     let login = first_line(capture(work, "github-login.txt", "gh", args3("api", "user", "--jq=.login")))
-    if login == "" { publish_error("unable to determine authenticated GitHub user") ret false }
+    if login == "" {
+        publish_error("unable to determine authenticated GitHub user") ret false
+    }
     let mut fork_args = Vec[str]::new()
     fork_args.push("repo")
     fork_args.push("fork")
@@ -383,13 +541,17 @@ fn open_index_pull_request(context: PublishContext) -> bool {
         // Existing forks also return successfully in current gh versions; clone below is authoritative.
     }
     let checkout = work.join("encore-index")
-    if file_exists(checkout.as_str()) { remove_dir_all(checkout.as_str()) }
+    if file_exists(checkout.as_str()) {
+        remove_dir_all(checkout.as_str())
+    }
     let mut clone_args = Vec[str]::new()
     clone_args.push("repo")
     clone_args.push("clone")
     clone_args.push(login + "/encore-index")
     clone_args.push(checkout.as_str())
-    if run_args("gh", clone_args) != 0_i32 { publish_error("unable to clone encore-index fork") ret false }
+    if run_args("gh", clone_args) != 0_i32 {
+        publish_error("unable to clone encore-index fork") ret false
+    }
     let mut remote_args = Vec[str]::new()
     remote_args.push("-C")
     remote_args.push(checkout.as_str())
@@ -404,8 +566,10 @@ fn open_index_pull_request(context: PublishContext) -> bool {
     fetch_args.push("fetch")
     fetch_args.push("upstream")
     fetch_args.push("main")
-    if run_args("git", fetch_args) != 0_i32 { publish_error("unable to fetch index main") ret false }
-    let branch = "publish/" + context.package_name + "-" + context.version
+    if run_args("git", fetch_args) != 0_i32 {
+        publish_error("unable to fetch index main") ret false
+    }
+    let branch = "publish/" + context.package_name + "-" + context.release
     let mut branch_args = Vec[str]::new()
     branch_args.push("-C")
     branch_args.push(checkout.as_str())
@@ -413,11 +577,22 @@ fn open_index_pull_request(context: PublishContext) -> bool {
     branch_args.push("-B")
     branch_args.push(branch)
     branch_args.push("upstream/main")
-    if run_args("git", branch_args) != 0_i32 { publish_error("unable to create index branch") ret false }
+    if run_args("git", branch_args) != 0_i32 {
+        publish_error("unable to create index branch") ret false
+    }
 
+    let epoch_path = checkout.join("index.json")
+    if !file_exists(epoch_path.as_str()) || !publish_index_epoch_matches(read_file(epoch_path.as_str())) {
+        publish_error("index epoch does not match this compiler; use a matching compiler or prepare an explicit registry cutover with --release-only")
+        ret false
+    }
     let metadata_path = checkout.join(context.package_name.slice(0_usize, 2_usize)).join(context.package_name + ".json")
     mkdir_all(metadata_path.parent().unwrap_or(checkout).as_str())
-    let source = if file_exists(metadata_path.as_str()) { read_file(metadata_path.as_str()) } else { "" }
+    let source = if file_exists(metadata_path.as_str()) {
+        read_file(metadata_path.as_str())
+    } else {
+        ""
+    }
     let updated = append_index_metadata(source, context)
     if updated == "" || write_file(metadata_path.as_str(), updated + "\n") != 0_i32 {
         publish_error("unable to update index metadata")
@@ -428,7 +603,9 @@ fn open_index_pull_request(context: PublishContext) -> bool {
     add_args.push(checkout.as_str())
     add_args.push("add")
     add_args.push(".")
-    if run_args("git", add_args) != 0_i32 { ret false }
+    if run_args("git", add_args) != 0_i32 {
+        ret false
+    }
     let mut diff_args = Vec[str]::new()
     diff_args.push("-C")
     diff_args.push(checkout.as_str())
@@ -448,8 +625,10 @@ fn open_index_pull_request(context: PublishContext) -> bool {
     commit_args.push("user.email=publish@encore.invalid")
     commit_args.push("commit")
     commit_args.push("-m")
-    commit_args.push("Publish " + context.package_name + " " + context.version)
-    if run_args("git", commit_args) != 0_i32 { publish_error("unable to commit index metadata") ret false }
+    commit_args.push("Publish " + context.package_name + " " + context.release)
+    if run_args("git", commit_args) != 0_i32 {
+        publish_error("unable to commit index metadata") ret false
+    }
     let mut push_args = Vec[str]::new()
     push_args.push("-C")
     push_args.push(checkout.as_str())
@@ -457,7 +636,9 @@ fn open_index_pull_request(context: PublishContext) -> bool {
     push_args.push("--force-with-lease")
     push_args.push("origin")
     push_args.push(branch)
-    if run_args("git", push_args) != 0_i32 { publish_error("unable to push index branch") ret false }
+    if run_args("git", push_args) != 0_i32 {
+        publish_error("unable to push index branch") ret false
+    }
     let mut pr_args = Vec[str]::new()
     pr_args.push("pr")
     pr_args.push("create")
@@ -468,10 +649,12 @@ fn open_index_pull_request(context: PublishContext) -> bool {
     pr_args.push("--base")
     pr_args.push("main")
     pr_args.push("--title")
-    pr_args.push("Publish " + context.package_name + " " + context.version)
+    pr_args.push("Publish " + context.package_name + " " + context.release)
     pr_args.push("--body")
     pr_args.push("Created by `encore publish` from " + context.repository_slug + " at " + context.source_commit + ".")
-    if run_args("gh", pr_args) != 0_i32 { publish_error("unable to open index pull request") ret false }
+    if run_args("gh", pr_args) != 0_i32 {
+        publish_error("unable to open index pull request") ret false
+    }
     ret true
 }
 
@@ -488,7 +671,9 @@ fn append_index_metadata(source: str, context: PublishContext) -> str {
     }
     match parse(source) {
         Result[Json, ParseError]::Ok(document) => {
-            if json_string(document, "name") != context.package_name { publish_error("index package name mismatch") ret "" }
+            if json_string(document, "name") != context.package_name {
+                publish_error("index package name mismatch") ret ""
+            }
             if repository_slug(json_string(document, "repository")) != context.repository_slug {
                 publish_error("index package is owned by another repository")
                 ret ""
@@ -500,9 +685,7 @@ fn append_index_metadata(source: str, context: PublishContext) -> str {
                         Some(items) => {
                             for item in items {
                                 if json_string(item, "version") == context.version {
-                                    if json_string(item, "checksum") == context.checksum
-                                        && json_string(item, "commit") == context.source_commit
-                                        && json_string(item, "encore") == context.compiler_requirement {
+                                    if immutable_publish_metadata_matches(item, version) {
                                         ret source
                                     }
                                     publish_error("package version already exists in index with different immutable metadata")
@@ -511,10 +694,13 @@ fn append_index_metadata(source: str, context: PublishContext) -> str {
                                 versions.push(item)
                             }
                         }
-                        None => { ret "" }
+                        None => {
+                            ret ""
+                        }
                     }
                 }
-                None => {}
+                None => {
+                }
             }
             versions.push(version)
             let mut root = Vec[(str, Json)]::new()
@@ -523,21 +709,59 @@ fn append_index_metadata(source: str, context: PublishContext) -> str {
             root.push(field("versions", Json::Array(versions)))
             ret stringify(Json::Object(root))
         }
-        Result[Json, ParseError]::Err(_) => { publish_error("existing index metadata is invalid") }
+        Result[Json, ParseError]::Err(_) => {
+            publish_error("existing index metadata is invalid")
+        }
     }
     ret ""
+}
+
+/// Checks immutable registry fields without changing the registry's yank policy.
+pub fn immutable_publish_metadata_matches(existing: Json, expected: Json) -> bool {
+    for key in vec!["version", "epoch", "nametag", "release", "archive", "checksum", "encore", "commit", "subdir"] {
+        if json_string(existing, key) != json_string(expected, key) {
+            ret false
+        }
+    }
+    // Yanking is registry policy; retrying publication must not undo it.
+    ret true
+}
+
+/// Validates the registry generation before preparing an index update.
+pub fn publish_index_epoch_matches(source: str) -> bool {
+    match parse(source) {
+        Result[Json, ParseError]::Ok(document) => {
+            match document.get("schema") {
+                Some(schema) => {
+                    if stringify(schema) != "2" {
+                        ret false
+                    }
+                }
+                None => {
+                    ret false
+                }
+            }
+            ret json_string(document, "epoch") == compiler_registry_epoch()
+        }
+        Result[Json, ParseError]::Err(_) => {
+            ret false
+        }
+    }
 }
 
 fn publish_version_json(context: PublishContext) -> Json {
     let mut item = Vec[(str, Json)]::new()
     item.push(field("version", Json::String(context.version)))
+    item.push(field("epoch", Json::String(compiler_registry_epoch())))
+    item.push(field("nametag", Json::String(context.release_name)))
+    item.push(field("release", Json::String(context.release)))
     item.push(field(
-        "archive",
-        Json::String(
-            "https://github.com/" + context.repository_slug + "/releases/download/"
+            "archive",
+            Json::String(
+                "https://github.com/" + context.repository_slug + "/releases/download/"
                 + context.tag + "/" + context.package_name + "-" + context.version + ".tar.gz"
-        ),
-    ))
+            ),
+        ))
     item.push(field("checksum", Json::String(context.checksum)))
     item.push(field("yanked", Json::Bool(false)))
     item.push(field("encore", Json::String(context.compiler_requirement)))
@@ -549,6 +773,7 @@ fn publish_version_json(context: PublishContext) -> Json {
 fn publish_metadata(
     name: str,
     version: str,
+    release_name: str,
     slug: str,
     subdir: str,
     commit: str,
@@ -557,7 +782,7 @@ fn publish_metadata(
     checksum: str,
     tag: str,
 ) -> str {
-    let context = PublishContext{
+    let context = PublishContext {
         Path::new("."),
         Path::new("."),
         slug,
@@ -565,6 +790,8 @@ fn publish_metadata(
         commit,
         name,
         version,
+        release_name,
+        version + "-" + release_name,
         requirement,
         tag,
         archive,
@@ -582,26 +809,34 @@ fn repository_slug(value: str) -> str {
         normalized = normalized.slice(21_usize, normalized.len() - 21_usize)
     } elif starts_with(normalized, "https://github.com/") {
         normalized = normalized.slice(19_usize, normalized.len() - 19_usize)
-    } else { ret "" }
-    if ends_with(normalized, ".git") { normalized = normalized.slice(0_usize, normalized.len() - 4_usize) }
-    while ends_with(normalized, "/") { normalized = normalized.slice(0_usize, normalized.len() - 1_usize) }
-    if count_character(normalized, "/") != 1_usize || contains(normalized, "..") || contains(normalized, " ") { ret "" }
+    } else {
+        ret ""
+    }
+    if ends_with(normalized, ".git") {
+        normalized = normalized.slice(0_usize, normalized.len() - 4_usize)
+    }
+    while ends_with(normalized, "/") {
+        normalized = normalized.slice(0_usize, normalized.len() - 1_usize)
+    }
+    if count_character(normalized, "/") != 1_usize || contains(normalized, "..") || contains(normalized, " ") {
+        ret ""
+    }
     ret normalized
 }
 
 #attr(test)
 fn publish_repository_normalization_contract() -> bool {
     ret repository_slug("https://github.com/encore-ecosystem/example.git") == "encore-ecosystem/example"
-        && repository_slug("git@github.com:encore-ecosystem/example.git") == "encore-ecosystem/example"
-        && repository_slug("https://example.com/encore-ecosystem/example") == ""
+    && repository_slug("git@github.com:encore-ecosystem/example.git") == "encore-ecosystem/example"
+    && repository_slug("https://example.com/encore-ecosystem/example") == ""
 }
 
 #attr(test)
 fn publish_glob_contract() -> bool {
     ret glob_matches("src/**", "src/net/mod.enq")
-        && glob_matches("*.md", "README.md")
-        && !glob_matches("src/*.enq", "src/net/mod.enq")
-        && glob_matches("tests/?asic.enq", "tests/basic.enq")
+    && glob_matches("*.md", "README.md")
+    && !glob_matches("src/*.enq", "src/net/mod.enq")
+    && glob_matches("tests/?asic.enq", "tests/basic.enq")
 }
 
 fn glob_matches(pattern: str, value: str) -> bool {
@@ -609,70 +844,108 @@ fn glob_matches(pattern: str, value: str) -> bool {
 }
 
 fn glob_at(pattern: str, pattern_index: usize, value: str, value_index: usize) -> bool {
-    if pattern_index == pattern.len() { ret value_index == value.len() }
+    if pattern_index == pattern.len() {
+        ret value_index == value.len()
+    }
     let token = pattern.slice(pattern_index, 1_usize)
     if token == "*" {
         let recursive = pattern_index + 1_usize < pattern.len() && pattern.slice(pattern_index + 1_usize, 1_usize) == "*"
-        let next = pattern_index + if recursive { 2_usize } else { 1_usize }
+        let next = pattern_index + if recursive {
+            2_usize
+        } else {
+            1_usize
+        }
         let mut cursor = value_index
         loop {
-            if glob_at(pattern, next, value, cursor) { ret true }
-            if cursor >= value.len() { break }
-            if !recursive && value.slice(cursor, 1_usize) == "/" { break }
+            if glob_at(pattern, next, value, cursor) {
+                ret true
+            }
+            if cursor >= value.len() {
+                break
+            }
+            if !recursive && value.slice(cursor, 1_usize) == "/" {
+                break
+            }
             cursor += 1_usize
         }
         ret false
     }
-    if value_index >= value.len() { ret false }
+    if value_index >= value.len() {
+        ret false
+    }
     if token == "?" {
-        if value.slice(value_index, 1_usize) == "/" { ret false }
+        if value.slice(value_index, 1_usize) == "/" {
+            ret false
+        }
         ret glob_at(pattern, pattern_index + 1_usize, value, value_index + 1_usize)
     }
-    if token != value.slice(value_index, 1_usize) { ret false }
+    if token != value.slice(value_index, 1_usize) {
+        ret false
+    }
     ret glob_at(pattern, pattern_index + 1_usize, value, value_index + 1_usize)
 }
 
 fn capture(work: Path, name: str, program: str, args: Vec[str]) -> str {
     let output = work.join(name)
     remove_file(output.as_str())
-    if run_args_capture(program, args, output.as_str()) != 0_i32 { ret "" }
+    if run_args_capture(program, args, output.as_str()) != 0_i32 {
+        ret ""
+    }
     ret trim(read_file(output.as_str()))
 }
 
 fn relative_path(root: Path, child: Path) -> str {
     let root_text = normalize_path(root.as_str())
     let child_text = normalize_path(child.as_str())
-    if root_text == child_text { ret "" }
+    if root_text == child_text {
+        ret ""
+    }
     let prefix = root_text + "/"
-    if !starts_with(child_text, prefix) { ret "" }
+    if !starts_with(child_text, prefix) {
+        ret ""
+    }
     ret child_text.slice(prefix.len(), child_text.len() - prefix.len())
 }
 
 fn strip_source_prefix(value: str, source_subdir: str) -> str {
-    if source_subdir == "" { ret value }
+    if source_subdir == "" {
+        ret value
+    }
     let prefix = source_subdir + "/"
-    if !starts_with(value, prefix) { ret "" }
+    if !starts_with(value, prefix) {
+        ret ""
+    }
     ret value.slice(prefix.len(), value.len() - prefix.len())
 }
 
 fn path_forbidden(value: str) -> bool {
     ret value == ".git" || starts_with(value, ".git/")
-        || value == "target" || starts_with(value, "target/")
-        || starts_with(value, "../") || starts_with(value, "/")
+    || value == "target" || starts_with(value, "target/")
+    || starts_with(value, "../") || starts_with(value, "/")
 }
 
 fn contains_source_file(files: Vec[str]) -> bool {
     for file in files {
-        if starts_with(file, "src/") && ends_with(file, ".enq") { ret true }
+        if starts_with(file, "src/") && ends_with(file, ".enq") {
+            ret true
+        }
     }
     ret false
 }
 
-fn argc() -> usize { ret process_arg_count() }
-fn argv(index: usize) -> Option[str] { ret process_arg(index) }
+fn argc() -> usize {
+    ret process_arg_count()
+}
+fn argv(index: usize) -> Option[str] {
+    ret process_arg(index)
+}
 
 fn contains_file(files: Vec[str], target: str) -> bool {
-    for file in files { if file == target { ret true } }
+    for file in files {
+        if file == target {
+            ret true
+        }
+    }
     ret false
 }
 
@@ -683,7 +956,14 @@ fn lines(value: str) -> Vec[str] {
     while index <= value.len() {
         if index == value.len() || value.slice(index, 1_usize) == "\n" {
             let line = value.slice(start, index - start)
-            if line != "" { out.push(if ends_with(line, "\r") { line.slice(0_usize, line.len() - 1_usize) } else { line }) }
+            if line != "" {
+                out.push(if ends_with(line, "\r") {
+                        line.slice(0_usize, line.len() - 1_usize)
+                    } else {
+                        line
+                    }
+                )
+            }
             start = index + 1_usize
         }
         index += 1_usize
@@ -693,32 +973,34 @@ fn lines(value: str) -> Vec[str] {
 
 fn first_line(value: str) -> str {
     let values = lines(value)
-    match values.get(0_usize) { Some(line) => { ret line } None => { ret "" } }
+    match values.get(0_usize) {
+        Some(line) => {
+            ret line
+        }
+        None => {
+            ret ""
+        }
+    }
 }
 
 fn first_column(value: str) -> str {
     let line = first_line(value)
     let mut index = 0_usize
-    while index < line.len() && line.slice(index, 1_usize) != " " && line.slice(index, 1_usize) != "\t" { index += 1_usize }
+    while index < line.len() && line.slice(index, 1_usize) != " " && line.slice(index, 1_usize) != "\t" {
+        index += 1_usize
+    }
     ret line.slice(0_usize, index)
 }
 
 fn verify_package(root: Path, repository_root: Path) -> bool {
-    let compiler = match argv(0_usize) { Some(value) => value None => "encore" }
-    let mut format_args = Vec[str]::new()
-    format_args.push("format")
-    format_args.push("--check")
-    if run_args(compiler, format_args) != 0_i32 { publish_error("format verification failed") ret false }
-    let commands = package_verification_commands()
-    for command in commands {
-        let mut args = Vec[str]::new()
-        args.push(command)
-        if run_args(compiler, args) != 0_i32 { publish_error(command + " verification failed") ret false }
+    let lock = root.join("encore.lock")
+    let had_lock = file_exists(lock.as_str())
+    let verified = run_package_verification(root)
+    if !had_lock {
+        remove_file(lock.as_str())
     }
-    if file_exists(root.join("src").join("main.enq").as_str()) {
-        let mut build_args = Vec[str]::new()
-        build_args.push("build")
-        if run_args(compiler, build_args) != 0_i32 { publish_error("build verification failed") ret false }
+    if !verified {
+        ret false
     }
     let status = capture(
         root.join("target").join("publish"),
@@ -726,12 +1008,46 @@ fn verify_package(root: Path, repository_root: Path) -> bool {
         "git",
         publish_status_args(repository_root, relative_path(repository_root, root)),
     )
-    if status != "" { publish_error("verification changed tracked files or the lockfile") ret false }
+    if status != "" {
+        publish_error("verification changed tracked files or the lockfile") ret false
+    }
+    ret true
+}
+
+fn run_package_verification(root: Path) -> bool {
+    let compiler = match argv(0_usize) {
+        Some(value) => value None => "encore"
+    }
+    let mut format_args = Vec[str]::new()
+    format_args.push("format")
+    format_args.push("--check")
+    if run_args(compiler, format_args) != 0_i32 {
+        publish_error("format verification failed") ret false
+    }
+    let commands = package_verification_commands()
+    for command in commands {
+        let mut args = Vec[str]::new()
+        args.push(command)
+        if run_args(compiler, args) != 0_i32 {
+            publish_error(command + " verification failed") ret false
+        }
+    }
+    if file_exists(root.join("src").join("main.enq").as_str()) {
+        let mut build_args = Vec[str]::new()
+        build_args.push("build")
+        if run_args(compiler, build_args) != 0_i32 {
+            publish_error("build verification failed") ret false
+        }
+    }
     ret true
 }
 
 fn publish_status_args(repository_root: Path, source_subdir: str) -> Vec[str] {
-    let target_path = if source_subdir == "" { "target" } else { source_subdir + "/target" }
+    let target_path = if source_subdir == "" {
+        "target"
+    } else {
+        source_subdir + "/target"
+    }
     let mut out = Vec[str]::new()
     out.push("-C")
     out.push(repository_root.as_str())
@@ -755,8 +1071,12 @@ fn package_verification_commands() -> Vec[str] {
 fn trim(value: str) -> str {
     let mut start = 0_usize
     let mut end = value.len()
-    while start < end && (value.slice(start, 1_usize) == " " || value.slice(start, 1_usize) == "\t" || value.slice(start, 1_usize) == "\n" || value.slice(start, 1_usize) == "\r") { start += 1_usize }
-    while end > start && (value.slice(end - 1_usize, 1_usize) == " " || value.slice(end - 1_usize, 1_usize) == "\t" || value.slice(end - 1_usize, 1_usize) == "\n" || value.slice(end - 1_usize, 1_usize) == "\r") { end -= 1_usize }
+    while start < end &&(value.slice(start, 1_usize) == " " || value.slice(start, 1_usize) == "\t" || value.slice(start, 1_usize) == "\n" || value.slice(start, 1_usize) == "\r") {
+        start += 1_usize
+    }
+    while end > start &&(value.slice(end - 1_usize, 1_usize) == " " || value.slice(end - 1_usize, 1_usize) == "\t" || value.slice(end - 1_usize, 1_usize) == "\n" || value.slice(end - 1_usize, 1_usize) == "\r") {
+        end -= 1_usize
+    }
     ret value.slice(start, end - start)
 }
 
@@ -765,10 +1085,16 @@ fn normalize_path(value: str) -> str {
     let mut index = 0_usize
     while index < value.len() {
         let ch = value.slice(index, 1_usize)
-        out += if ch == "\\" { "/" } else { ch }
+        out += if ch == "\\" {
+            "/"
+        } else {
+            ch
+        }
         index += 1_usize
     }
-    while ends_with(out, "/") { out = out.slice(0_usize, out.len() - 1_usize) }
+    while ends_with(out, "/") {
+        out = out.slice(0_usize, out.len() - 1_usize)
+    }
     ret out
 }
 
@@ -776,7 +1102,9 @@ fn count_character(value: str, needle: str) -> usize {
     let mut count = 0_usize
     let mut index = 0_usize
     while index < value.len() {
-        if value.slice(index, 1_usize) == needle { count += 1_usize }
+        if value.slice(index, 1_usize) == needle {
+            count += 1_usize
+        }
         index += 1_usize
     }
     ret count
@@ -784,8 +1112,17 @@ fn count_character(value: str, needle: str) -> usize {
 
 fn json_string(value: Json, key: str) -> str {
     match value.get(key) {
-        Some(item) => { match item.as_str() { Some(text) => { ret text } None => {} } }
-        None => {}
+        Some(item) => {
+            match item.as_str() {
+                Some(text) => {
+                    ret text
+                }
+                None => {
+                }
+            }
+        }
+        None => {
+        }
     }
     ret ""
 }
@@ -793,30 +1130,105 @@ fn json_string(value: Json, key: str) -> str {
 fn has_switch(name: str) -> bool {
     let mut index = 2_usize
     while index < argc() {
-        match argv(index) { Some(value) => { if value == name { ret true } } None => {} }
+        match argv(index) {
+            Some(value) => {
+                if value == name {
+                    ret true
+                }
+            }
+            None => {
+            }
+        }
         index += 1_usize
     }
     ret false
 }
 
-fn empty_context(root: Path) -> PublishContext {
-    ret PublishContext{root, root, "", "", "", "", "", "", "", root, "", ""}
+fn option_value(name: str, fallback: str) -> str {
+    let mut index = 2_usize
+    while index + 1_usize < argc() {
+        match argv(index) {
+            Some(value) => {
+                if value == name {
+                    match argv(index + 1_usize) {
+                        Some(found) => {
+                            ret found
+                        }
+                        None => {
+                        }
+                    }
+                }
+            }
+            None => {
+            }
+        }
+        index += 1_usize
+    }
+    ret fallback
 }
 
-fn single_arg(a: str) -> Vec[str] { let mut out = Vec[str]::new() out.push(a) ret out }
-fn args3(a: str, b: str, c: str) -> Vec[str] { let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) ret out }
-fn args4(a: str, b: str, c: str, d: str) -> Vec[str] { let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) out.push(d) ret out }
-fn args5(a: str, b: str, c: str, d: str, e: str) -> Vec[str] { let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) out.push(d) out.push(e) ret out }
-fn args6(a: str, b: str, c: str, d: str, e: str, f: str) -> Vec[str] { let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) out.push(d) out.push(e) out.push(f) ret out }
+fn valid_release_name(value: str) -> bool {
+    if value == "" || value.slice(0_usize, 1_usize) == "-" || ends_with(value, "-") {
+        ret false
+    }
+    let mut index = 0_usize
+    while index < value.len() {
+        let ch = value.slice(index, 1_usize)
+        if !contains("abcdefghijklmnopqrstuvwxyz0123456789-", ch) {
+            ret false
+        }
+        index += 1_usize
+    }
+    ret true
+}
 
-fn publish_error(message: str) -> () { eprintln("error[publish]: " + message) ret () }
-fn starts_with(value: str, prefix: str) -> bool { ret prefix.len() <= value.len() && value.slice(0_usize, prefix.len()) == prefix }
-fn ends_with(value: str, suffix: str) -> bool { ret suffix.len() <= value.len() && value.slice(value.len() - suffix.len(), suffix.len()) == suffix }
+#attr(test)
+fn publish_release_name_contract() -> bool {
+    ret valid_release_name("neumann") && valid_release_name("next-2")
+    && !valid_release_name("") && !valid_release_name("Beta")
+    && !valid_release_name("bad_name") && !valid_release_name("-edge")
+}
+
+fn empty_context(root: Path) -> PublishContext {
+    ret PublishContext {
+        root, root, "", "", "", "", "", "", "", "", "", root, "", ""
+    }
+}
+
+fn single_arg(a: str) -> Vec[str] {
+    let mut out = Vec[str]::new() out.push(a) ret out
+}
+fn args3(a: str, b: str, c: str) -> Vec[str] {
+    let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) ret out
+}
+fn args4(a: str, b: str, c: str, d: str) -> Vec[str] {
+    let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) out.push(d) ret out
+}
+fn args5(a: str, b: str, c: str, d: str, e: str) -> Vec[str] {
+    let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) out.push(d) out.push(e) ret out
+}
+fn args6(a: str, b: str, c: str, d: str, e: str, f: str) -> Vec[str] {
+    let mut out = Vec[str]::new() out.push(a) out.push(b) out.push(c) out.push(d) out.push(e) out.push(f) ret out
+}
+
+fn publish_error(message: str) ->() {
+    eprintln("error[publish]: " + message) ret()
+}
+fn starts_with(value: str, prefix: str) -> bool {
+    ret prefix.len() <= value.len() && value.slice(0_usize, prefix.len()) == prefix
+}
+fn ends_with(value: str, suffix: str) -> bool {
+    ret suffix.len() <= value.len() && value.slice(value.len() - suffix.len(), suffix.len()) == suffix
+}
 fn contains(value: str, needle: str) -> bool {
-    if needle == "" { ret true }
+    if needle == "" {
+        ret true
+    }
     let mut index = 0_usize
     while index + needle.len() <= value.len() {
-        if value.slice(index, needle.len()) == needle { ret true }
+        if value.slice(index, needle.len()) == needle {
+            ret true
+        }
         index += 1_usize
     }
     ret false

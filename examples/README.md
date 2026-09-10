@@ -4,7 +4,7 @@ Each directory is an independent Encore project. Build or run it with the
 native compiler:
 
 ```sh
-cd add_two_structs
+cd echo
 encore build --profile release
 encore run
 ```
@@ -16,8 +16,19 @@ cd echo
 encore run -- hello Encore
 ```
 
-The examples exercise language control flow, generics, collections, native
-runtime APIs, networking, terminal output, EHIR and LLVM generation.
+This directory keeps practical programs and focused demonstrations of Encore's
+distinctive features. Basic syntax is covered by the
+[language book](../docs/enbook-en/src/SUMMARY.md); compiler regressions belong
+in `tests/`.
+
+- Command-line tools: `echo`, `cat`, `wc`, `lslite`, `toml_reader`.
+- Algorithms: `aho_corasick`, `binsearch`, `merge_sort`, `quick_sort`, `gradient`.
+- Terminal output and networking: `hello`, `donut`, `hello_server`.
+- Language and runtime: `add_two_structs`, `any_pointer`, `heap`, `try_result`,
+  `ehir_blocks`, `refrains`.
+
+Nested library packages, such as `refrains/math`, use `encore check`; build
+their parent application to exercise linking.
 
 Concurrency examples:
 

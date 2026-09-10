@@ -1,0 +1,21 @@
+import core::testing::assert
+import std::thread::JoinHandle
+import std::time::sleep_ms
+
+struct PendingValue {
+    handle: JoinHandle[u32]
+}
+
+fn delayed_value() -> u32 {
+    sleep_ms(40_u64)
+    ret 42_u32
+}
+
+fn main() -> u32 {
+    let worker = PendingValue { spawn delayed_value() }
+    if !assert(!worker.handle.is_finished()) { ret 1_u32 }
+    sleep_ms(80_u64)
+    if !assert(worker.handle.is_finished()) { ret 2_u32 }
+    if !assert(worker.handle.join() == 42_u32) { ret 3_u32 }
+    ret 0_u32
+}

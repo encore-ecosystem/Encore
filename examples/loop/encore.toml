@@ -1,6 +1,0 @@
-[project]
-name = "loop"
-version = "0.1.0"
-description = "Simple example of loop instruction"
-readme = "README.md"
-dependencies = []

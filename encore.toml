@@ -1,6 +1,6 @@
 [project]
 name = "encore"
-version = "0.3.0-beta.1"
+version = "0.0.0"
 description = ""
 readme = "README.md"
 licence = "MIT"

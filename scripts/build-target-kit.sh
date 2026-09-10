@@ -41,6 +41,7 @@ test -n "$host" && test -n "$target" && test -d "$toolchain" &&
   test -n "$linker" && test -n "$archiver" || usage
 
 version=$(tr -d '\r\n' < "$(dirname "$0")/../VERSION")
+version=${version%%-*}
 abi=$(printf '%s\n' "$version" | awk -F. '{print $1 "." $2}')
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

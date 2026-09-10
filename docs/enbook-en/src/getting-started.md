@@ -1,10 +1,19 @@
 # Getting Started
 
+First complete [Installation and Editor Setup](installation.md). This chapter
+is a command reference for your first project; next build the
+[text-report tutorial](text-report.md).
+
 Create a package in an empty directory:
 
 ```sh
+mkdir hello
+cd hello
 encore init --name hello
 ```
+
+`init` initializes the current directory; `--name` sets the package name,
+not the name of a subdirectory to create.
 
 `encore init` creates:
 
@@ -85,7 +94,7 @@ encore self channel
 encore self channel beta
 encore self update --check
 encore self update
-encore self install 0.2.1
+encore self install 0.0.0-neumann
 ```
 
 `stable` is the default compiler channel. `beta` receives numbered preview
@@ -109,7 +118,8 @@ encore build --profile release
 encore build --target aarch64-unknown-linux-gnu
 ```
 
-`debug` builds use `-O0` with debug information and frame pointers. `release`
+The default `dev` profile uses `-O0` without debug information. `debug` adds
+debug information and frame pointers. `release`
 uses portable `-O2`. `extreme` enables `-O3`, ThinLTO through LLVM `lld`, and
 32-byte hot-loop alignment; for a host build it also targets the native CPU
 unless `target-cpu` is configured.

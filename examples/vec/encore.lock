@@ -1,6 +1,0 @@
-version = 1
-[[packages]]
-name = "core"
-ref = "sys@core"
-version = "0.0.0"
-

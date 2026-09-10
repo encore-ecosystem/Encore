@@ -1,6 +1,0 @@
-[project]
-name = "box"
-version = "0.1.0"
-description = "Box[T] smoke example"
-readme = "README.md"
-dependencies = []

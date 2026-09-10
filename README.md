@@ -20,7 +20,7 @@ SHA-256 checksum and replaces an existing installation transactionally.
 # Install an exact release.
 curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/encore-ecosystem/encore/trunk/install.sh |
-  sh -s -- --version 0.2.1
+  sh -s -- --version 0.0.0-neumann
 
 ~/.encore/bin/encore --version
 
@@ -66,8 +66,7 @@ An existing native compiler can build and test this repository:
 ./target/extreme/encore test
 ```
 
-The final two bootstrap compilers must be byte-identical. See
-[`RELEASE.md`](RELEASE.md) for the release pipeline.
+The final two bootstrap compilers must be byte-identical.
 
 ## License
 

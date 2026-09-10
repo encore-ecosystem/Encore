@@ -23,6 +23,10 @@ extern fn encore_strset_new() -> usize
 extern fn encore_strset_insert(set: usize, value: str) -> bool
 extern fn encore_strset_contains(set: usize, value: str) -> bool
 extern fn encore_strset_free(set: usize) ->()
+extern fn encore_strmap_new() -> usize
+extern fn encore_strmap_put(map: usize, key: str, value: usize) ->()
+extern fn encore_strmap_get(map: usize, key: str) -> usize
+extern fn encore_strmap_free(map: usize) ->()
 
 /// Deterministic identity of a module across analysis database instances.
 pub struct ModuleId {
@@ -107,6 +111,81 @@ pub struct PreparedSemanticModule {
     resolution_diagnostics: Vec[FrontendDiagnostic]
 }
 
+/// Immutable module input used to assemble an isolated semantic workspace.
+pub struct AnalysisSourceSnapshot {
+    module_name: str
+    source_name: str
+    source: str
+}
+
+/// Immutable source snapshot for a complete semantic check on a worker.
+pub struct PreparedSemanticWorkspace {
+    module_name: str
+    sources: Vec[AnalysisSourceSnapshot]
+}
+
+impl for AnalysisSourceSnapshot {
+    /// Creates one canonical source entry for a tooling semantic snapshot.
+    pub fn new(module_name: str, source_name: str, source: str) -> Self {
+        ret Self {
+            module_name, source_name, source
+        }
+    }
+}
+
+/// Freezes resolved source entries for checking on a worker thread.
+pub fn prepare_semantic_workspace_from_sources(module_name: str,
+    sources: Vec[AnalysisSourceSnapshot],) -> sending PreparedSemanticWorkspace {
+    ret PreparedSemanticWorkspace {
+        module_name, sources
+    }
+}
+
+/// Owns a completed tolerant module analysis which can be produced on a
+/// worker thread and installed into the mutable database by its owner.
+pub struct PreparedLightweightModule {
+    module_name: str
+    source_name: str
+    source: str
+    source_fingerprint: u64
+    interface_fingerprint: u64
+    document: FrontendDocument
+}
+
+/// Computes the complete tolerant per-module query without accessing an
+/// analysis database or filesystem.
+pub fn prepare_lightweight_module(module_name: str, source_name: str, source: str) -> sending PreparedLightweightModule {
+    let document = analyze_module_lightweight(module_name, source)
+    ret PreparedLightweightModule {
+        module_name,
+        source_name,
+        source,
+        source.hash(),
+        module_interface_fingerprint(document.tokens),
+        document
+    }
+}
+
+/// Wraps a validated editor cache entry for installation in an analysis database.
+pub fn prepare_cached_lightweight_module(module_name: str, source_name: str, source: str,
+    document: sending FrontendDocument,) -> sending PreparedLightweightModule {
+    ret PreparedLightweightModule {
+        module_name,
+        source_name,
+        source,
+        source.hash(),
+        module_interface_fingerprint(document.tokens),
+        document
+    }
+}
+
+impl for PreparedLightweightModule {
+    /// Returns the completed tolerant frontend document.
+    pub fn document(self: Self) -> FrontendDocument {
+        ret self.document
+    }
+}
+
 /// Checks one prepared module without reading or mutating an analysis database.
 pub fn check_prepared_semantic_module(prepared: PreparedSemanticModule) -> Vec[FrontendDiagnostic] {
     let document = analyze_named_module(prepared.module_name, prepared.source_name, prepared.source)
@@ -114,6 +193,15 @@ pub fn check_prepared_semantic_module(prepared: PreparedSemanticModule) -> Vec[F
     diagnostics.extend(prepared.resolution_diagnostics)
     diagnostics.extend(check_module_bodies(document.ast, prepared.callables, prepared.fields, prepared.methods))
     ret diagnostics
+}
+
+/// Checks a source snapshot without reading or mutating the owner's database.
+pub fn check_prepared_semantic_workspace(prepared: sending PreparedSemanticWorkspace) -> sending Vec[FrontendDiagnostic] {
+    let mut database = AnalysisDatabase::new()
+    for source in prepared.sources {
+        database.set_module(source.module_name, source.source_name, source.source)
+    }
+    ret database.module_semantic_diagnostics(prepared.module_name)
 }
 
 impl for ModuleId {
@@ -167,6 +255,20 @@ impl for AnalysisDatabase {
         ret self.revision
     }
 
+    /// Copies immutable source inputs for an isolated worker-side semantic check.
+    pub fn prepare_semantic_workspace(self: Self, module_name: str) -> sending PreparedSemanticWorkspace {
+        let mut sources = Vec[AnalysisSourceSnapshot]::new()
+        for source in self.sources {
+            sources.push(AnalysisSourceSnapshot {
+                    source.module_name, source.source_name, source.source
+                }
+                ,)
+        }
+        ret PreparedSemanticWorkspace {
+            module_name, sources
+        }
+    }
+
     /// Returns the stable identity assigned to a registered module.
     pub fn module_id(self: Self, module_name: str) -> Option[ModuleId] {
         for entry in self.sources {
@@ -183,7 +285,19 @@ impl for AnalysisDatabase {
     /// changes are known before another module is requested. Full parsing stays
     /// lazy and is performed by `document`.
     pub fn set_module(self: mut Self, module_name: str, source_name: str, source: str) ->() {
-        let source_fingerprint = source.hash()
+        self.apply_prepared_lightweight(prepare_lightweight_module(module_name, source_name, source))
+        ret()
+    }
+
+    /// Installs a tolerant query produced by `prepare_lightweight_module`
+    /// without repeating lexer or declaration work on this thread.
+    pub fn apply_prepared_lightweight(self: mut Self, prepared: sending PreparedLightweightModule) ->() {
+        let module_name = prepared.module_name
+        let source_name = prepared.source_name
+        let source = prepared.source
+        let source_fingerprint = prepared.source_fingerprint
+        let lightweight = prepared.document
+        let interface_fingerprint = prepared.interface_fingerprint
         let mut index = 0_usize
         while index < self.sources.len() {
             match self.sources.get(index) {
@@ -194,8 +308,6 @@ impl for AnalysisDatabase {
                             ret()
                         }
                         self.revision += 1_usize
-                        let lightweight = analyze_module_lightweight(module_name, source)
-                        let interface_fingerprint = module_interface_fingerprint(lightweight.tokens)
                         let interface_changed = interface_fingerprint != entry.interface_fingerprint
                         let interface_revision = if interface_changed {
                             self.revision
@@ -235,8 +347,6 @@ impl for AnalysisDatabase {
 
         self.revision += 1_usize
         let id = module_identity(module_name)
-        let lightweight = analyze_module_lightweight(module_name, source)
-        let interface_fingerprint = module_interface_fingerprint(lightweight.tokens)
         self.sources.push(AnalysisSource {
                 id,
                 module_name,
@@ -1337,14 +1447,9 @@ impl for AnalysisDatabase {
         let visible_modules = self.visible_semantic_modules(module_name)
         let mut out = Vec[SemanticCallable]::new()
         for visible in visible_modules {
-            let document = match if visible == module_name {
-                self.stored_full_document(visible)
-            } else {
-                self.document(visible)
-            }
-            {
+            let document = match self.stored_full_document(visible) {
                 Option[FrontendDocument]::Some(value) => value
-                Option[FrontendDocument]::None => FrontendDocument::empty()
+                Option[FrontendDocument]::None => self.document(visible).unwrap_or(FrontendDocument::empty())
             }
             for statement in document.ast {
                 match statement {
@@ -1362,14 +1467,9 @@ impl for AnalysisDatabase {
     fn visible_semantic_fields(self: mut Self, module_name: str) -> Vec[SemanticField] {
         let mut out = Vec[SemanticField]::new()
         for visible in self.visible_semantic_modules(module_name) {
-            let document = match if visible == module_name {
-                self.stored_full_document(visible)
-            } else {
-                self.document(visible)
-            }
-            {
+            let document = match self.stored_full_document(visible) {
                 Option[FrontendDocument]::Some(value) => value
-                Option[FrontendDocument]::None => FrontendDocument::empty()
+                Option[FrontendDocument]::None => self.document(visible).unwrap_or(FrontendDocument::empty())
             }
             for statement in document.ast {
                 match statement {
@@ -1405,14 +1505,9 @@ impl for AnalysisDatabase {
             }
         }
         for visible in method_modules {
-            let document = match if visible == module_name {
-                self.stored_full_document(visible)
-            } else {
-                self.document(visible)
-            }
-            {
+            let document = match self.stored_full_document(visible) {
                 Option[FrontendDocument]::Some(value) => value
-                Option[FrontendDocument]::None => FrontendDocument::empty()
+                Option[FrontendDocument]::None => self.document(visible).unwrap_or(FrontendDocument::empty())
             }
             for statement in document.ast {
                 match statement {
@@ -1797,13 +1892,16 @@ fn module_identity(module_name: str) -> ModuleId {
 
 fn symbol_identities(module_name: str, symbols: Vec[FrontendSymbol]) -> Vec[AnalysisSymbolIdentity] {
     let mut out = Vec[AnalysisSymbolIdentity]::new()
+    let ordinals = encore_strmap_new()
     for symbol in symbols {
         let scoped_name = if symbol.scope == "" {
             symbol.name
         } else {
             symbol.scope + "::" + symbol.name
         }
-        let ordinal = next_symbol_ordinal(out, scoped_name, symbol.kind)
+        let ordinal_key = scoped_name + "\n" + Debug::fmt(symbol.kind)
+        let ordinal = encore_strmap_get(ordinals, ordinal_key)
+        encore_strmap_put(ordinals, ordinal_key, ordinal + 1_usize)
         let key = module_name + "#" + Debug::fmt(symbol.kind) + "#" + scoped_name + "#" + Debug::fmt(ordinal)
         out.push(AnalysisSymbolIdentity {
                 scoped_name, symbol.kind, ordinal, SymbolId {
@@ -1813,6 +1911,7 @@ fn symbol_identities(module_name: str, symbols: Vec[FrontendSymbol]) -> Vec[Anal
             ,
         )
     }
+    encore_strmap_free(ordinals)
     ret out
 }
 
@@ -1834,16 +1933,6 @@ fn identity_at(identities: Vec[AnalysisSymbolIdentity], index: usize) -> SymbolI
         }
     }
     ret SymbolId::invalid()
-}
-
-fn next_symbol_ordinal(identities: Vec[AnalysisSymbolIdentity], name: str, kind: usize) -> usize {
-    let mut ordinal = 0_usize
-    for identity in identities {
-        if identity.name == name && identity.kind == kind {
-            ordinal += 1_usize
-        }
-    }
-    ret ordinal
 }
 
 fn document_imports_module(document: FrontendDocument, module_name: str) -> bool {

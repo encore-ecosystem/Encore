@@ -1,6 +1,0 @@
-[project]
-name = "mutability"
-version = "0.1.0"
-description = "Mutability smoke example"
-readme = "README.md"
-dependencies = []

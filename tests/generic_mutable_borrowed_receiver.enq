@@ -1,0 +1,24 @@
+//! Generic heap nodes support explicit mutable borrowed receivers.
+
+struct Cell[T] {
+    value: T
+    reads: u32
+}
+
+impl[T] for Cell[T] {
+    fn read(self: mut Self &) -> T {
+        self.reads += 1_u32
+        ret self.value
+    }
+}
+
+fn main() -> u32 {
+    let cell = Cell[u32] < H > {
+        42_u32, 0_u32
+    }
+    ret if cell.read() == 42_u32 {
+        0_u32
+    } else {
+        1_u32
+    }
+}

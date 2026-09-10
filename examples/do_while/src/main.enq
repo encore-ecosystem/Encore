@@ -1,7 +1,0 @@
-fn main() -> u32 {
-    let mut a: u32 = 0_u32
-    do {
-        a = a + 2_u32
-    } while a < 62_u32
-    ret a
-}
