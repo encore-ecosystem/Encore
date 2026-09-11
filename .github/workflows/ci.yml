@@ -604,11 +604,6 @@ jobs:
           fi
           cp "$index_root/lsp/target/release/$source_name" "target/stage3/$installed_name"
           chmod +x "target/stage3/$installed_name" 2>/dev/null || true
-          if [[ "${{ matrix.triple }}" == x86_64-unknown-linux-gnu ]]; then
-            for suite in docstrings protocol_features scheduler workspace_graph; do
-              timeout 180 python3 "$index_root/lsp/tests/$suite.py" "target/stage3/$installed_name"
-            done
-          fi
 
       - name: Assemble offline test context
         shell: bash
@@ -689,6 +684,22 @@ jobs:
           else
             (cd dist && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
           fi
+
+      - name: Verify packaged language server without global installation
+        if: matrix.triple == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=$(tr -d '\r\n' < VERSION)
+          root="$PWD/target/package/encore-$release-${{ matrix.triple }}"
+          # No HOME, ENCORE_HOME or development overrides: discover libraries
+          # beside the packaged executable, exactly as a fresh installation.
+          for suite in docstrings protocol_features scheduler workspace_graph; do
+            env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
+              ENCORE_INDEX_URL=http://127.0.0.1:9 \
+              timeout 180 python3 "$PWD/../encore-index/lsp/tests/$suite.py" \
+              "$root/bin/encore-lsp"
+          done
 
       - uses: actions/upload-artifact@v7
         with:
