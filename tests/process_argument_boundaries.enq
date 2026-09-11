@@ -1,0 +1,54 @@
+//! Preserves native argument boundaries through each shell-free process API.
+
+import core::vec::Vec
+import std::os::{argc, argv, executable_path, mkdir_all, copy_file, set_executable}
+import std::path::Path
+import std::process::{Command, run_args, run_args_owned, run_args_capture}
+
+fn arguments() -> Vec[str] {
+    ret vec!["--argument-child", "", "two words", "tab\tvalue", "\"quoted\"",
+        "trailing\\", "space and trailing\\", "slash\\\"quote", "&& literal | > %PATH%"]
+}
+
+fn main() -> u32 {
+    let expected = arguments()
+    if argv(1_usize).unwrap_or("") == "--argument-child" {
+        if argc() != expected.len() + 1_usize {
+            ret 20_u32
+        }
+        let mut index = 0_usize
+        for value in expected {
+            if argv(index + 1_usize).unwrap_or("missing") != value {
+                ret 21_u32
+            }
+            index += 1_usize
+        }
+        ret 7_u32
+    }
+    let work = Path::new("target/process argument test").resolve()
+    mkdir_all(work.as_str())
+    let binary = work.join("child with spaces.exe")
+    if copy_file(executable_path(), binary.as_str()) != 0_i32 {
+        ret 1_u32
+    }
+    if set_executable(binary.as_str()) != 0_i32 {
+        ret 2_u32
+    }
+    if run_args(binary.as_str(), expected) != 7_i32 {
+        ret 3_u32
+    }
+    if run_args_owned(binary.as_str(), arguments()) != 7_i32 {
+        ret 4_u32
+    }
+    if run_args_capture(binary.as_str(), arguments(), work.join("captured output.txt").as_str()) != 7_i32 {
+        ret 5_u32
+    }
+    let mut command = Command::new(binary.as_str())
+    for value in arguments() {
+        command = command.arg(value)
+    }
+    if command.output().code() != 7_i32 {
+        ret 6_u32
+    }
+    ret 0_u32
+}
