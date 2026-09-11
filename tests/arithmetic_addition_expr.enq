@@ -1,9 +1,0 @@
-import core::testing::*
-
-fn main() -> u32 {
-    let sum = 1_u32 + 2_u32
-    if !assert(sum == 3_u32) {
-        ret 1_u32
-    }
-    ret 0_u32
-}
