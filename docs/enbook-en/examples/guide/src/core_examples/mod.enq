@@ -1,3 +1,5 @@
+//! Source-backed examples for core library chapters.
+
 // ANCHOR: call
 #attr(decorator)
 pub fn invoke[Args](func: Callable[Args, u32], args: Args) -> u32 {

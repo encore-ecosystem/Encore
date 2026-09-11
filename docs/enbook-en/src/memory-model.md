@@ -1,5 +1,10 @@
 # Memory Model
 
+This is the advanced model and implementation contract. Start with
+[Values, Sharing, and Mutation](values-and-sharing.md) for the practical
+introduction. A stated runtime invariant is not a claim that every compiler
+revision is free of bugs; use the validation guidance below for regressions.
+
 EHIR is a state machine over graph memory. Encore is a source-language layer
 which lowers imports, loops, pattern matching and other compound constructs to
 that machine; it does not define a second ownership model.
@@ -306,20 +311,21 @@ reference-counted buffers. For example, the public vector API uses
 contained recursively in every initialized element.
 
 ```enq
-let values = Vec[Target<H>]::new()
+let mut values = Vec[Target<H>]::new()
 values.push(Target<H>{1_u32})
 let same = values
-same.push(Target<H>{2_u32})
-// values and same refer to the same vector node.
+// values and same refer to the same vector node; same is read-only.
 ```
 
 `values.clone()` is the library operation for an independent vector.
 
 ## Concurrency
 
-Public node handles `T<S>`, `T<H>` and `T&` are not `Send`. `spawn` accepts an
-inline value only when its complete structure is `Send`; a nested node handle,
-raw pointer or mutable local alias rejects the transfer.
+Ordinary spawn arguments must have a recursively transfer-safe inline shape.
+Public node handles cannot cross that boundary merely because they are owned.
+Exclusive graph regions can instead cross through `sending`; recursively
+read-only shared regions use `frozen`. These are compiler-checked capabilities,
+not an opt-in nominal `Send` trait. See [Concurrency](concurrency.md).
 
 Runtime-internal immutable nodes, such as string storage, may cross threads.
 The common graph lock and atomic publication rules keep their ownership

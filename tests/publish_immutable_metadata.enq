@@ -1,0 +1,47 @@
+//! Verifies that publication retries preserve every immutable registry field.
+
+import core::vec::Vec
+import json::{Json, field}
+import refrain::modes::publish::{immutable_publish_metadata_matches, publish_index_epoch_matches}
+
+fn metadata(changed: str, yanked: bool) -> Json {
+    let mut fields = Vec[(str, Json)]::new()
+    for key in vec!["version", "epoch", "nametag", "release", "archive", "checksum", "encore", "commit", "subdir"] {
+        fields.push(field(key, Json::String(if key == changed {
+                        "changed"
+                    } else {
+                        key
+                    }
+                )))
+    }
+    fields.push(field("yanked", Json::Bool(yanked)))
+    ret Json::Object(fields)
+}
+
+fn main() -> u32 {
+    if !publish_index_epoch_matches("{\"schema\":2,\"epoch\":\"neumann\"}") {
+        ret 4_u32
+    }
+    if publish_index_epoch_matches("{\"schema\":2,\"epoch\":\"other\"}") {
+        ret 5_u32
+    }
+    if publish_index_epoch_matches("{\"schema\":1,\"epoch\":\"neumann\"}") {
+        ret 6_u32
+    }
+    if publish_index_epoch_matches("{}") || publish_index_epoch_matches("invalid") {
+        ret 7_u32
+    }
+    let original = metadata("", false)
+    if !immutable_publish_metadata_matches(original, metadata("", false)) {
+        ret 1_u32
+    }
+    if !immutable_publish_metadata_matches(original, metadata("", true)) {
+        ret 2_u32
+    }
+    for key in vec!["version", "epoch", "nametag", "release", "archive", "checksum", "encore", "commit", "subdir"] {
+        if immutable_publish_metadata_matches(original, metadata(key, false)) {
+            ret 3_u32
+        }
+    }
+    ret 0_u32
+}

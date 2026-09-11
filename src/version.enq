@@ -1,4 +1,21 @@
-//! Provides the compiler release version from one source location.
+//! Provides the compiler compatibility version and official release identity.
 
-/// Returns the semantic version embedded in this compiler.
-pub fn compiler_version() -> str { ret "0.3.0-beta.1" }
+/// Returns the SemVer compatibility version used by package constraints.
+pub fn compiler_version() -> str {
+    ret "0.0.0"
+}
+
+/// Returns the lowercase name of this official release train.
+pub fn compiler_release_name() -> str {
+    ret "neumann"
+}
+
+/// Returns the registry generation, independent of individual release names.
+pub fn compiler_registry_epoch() -> str {
+    ret "neumann"
+}
+
+/// Returns the version identity used by binaries, tags, and release assets.
+pub fn compiler_release_version() -> str {
+    ret "0.0.0-neumann"
+}

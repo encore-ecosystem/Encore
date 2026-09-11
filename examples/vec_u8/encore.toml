@@ -1,5 +1,0 @@
-[project]
-name = "vec_u8"
-version = "0.1.0"
-description = "Vec[u8] self-hosted heap-layout smoke example"
-dependencies = []

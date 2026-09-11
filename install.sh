@@ -65,10 +65,10 @@ if [ "$action" = "uninstall" ]; then
     exit 0
 fi
 
-expected_version=$version
+expected_release=$version
 release_tag=$version
 if [ "$version" != "latest" ]; then
-    expected_version=${version#v}
+    expected_release=${version#v}
     case "$version" in
         v*) ;;
         *) release_tag="v$version" ;;
@@ -164,9 +164,14 @@ package_dir=$(find "$download_dir/unpack" -mindepth 1 -maxdepth 1 -type d | head
 [ -n "$package_dir" ] || { echo "Release archive is empty" >&2; exit 1; }
 [ -s "$package_dir/bin/encore" ] || { echo "Release archive does not contain bin/encore" >&2; exit 1; }
 [ -f "$package_dir/VERSION" ] || { echo "Release archive does not contain VERSION" >&2; exit 1; }
-package_version=$(cat "$package_dir/VERSION")
-if [ "$version" != "latest" ] && [ "$package_version" != "$expected_version" ]; then
-    echo "Release version mismatch: requested $expected_version, archive contains $package_version" >&2
+package_release=$(cat "$package_dir/VERSION")
+# Legacy stable distributions remain installable during the named-release cutover.
+if ! printf '%s\n' "$package_release" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[a-z][a-z0-9.-]*)?$'; then
+    echo "Invalid release identity in VERSION" >&2
+    exit 1
+fi
+if [ "$version" != "latest" ] && [ "$package_release" != "$expected_release" ]; then
+    echo "Release version mismatch: requested $expected_release, archive contains $package_release" >&2
     exit 1
 fi
 
@@ -176,9 +181,9 @@ transaction_dir=$(mktemp -d "$install_parent/.encore-install.XXXXXX")
 mkdir -p "$transaction_dir/new"
 cp -R "$package_dir/bin" "$package_dir/lib" "$package_dir/share" "$package_dir/VERSION" "$transaction_dir/new/"
 chmod +x "$transaction_dir/new/bin/encore"
-installed_version=$($transaction_dir/new/bin/encore --version 2>/dev/null || true)
-if [ "$installed_version" != "encore $package_version" ]; then
-    echo "Compiler version mismatch: archive contains $package_version, binary reports '${installed_version:-unavailable}'" >&2
+installed_version=$("$transaction_dir/new/bin/encore" --version 2>/dev/null || true)
+if [ "$installed_version" != "encore $package_release" ]; then
+    echo "Compiler version mismatch: archive contains $package_release, binary reports '${installed_version:-unavailable}'" >&2
     exit 1
 fi
 if [ -e "$install_root" ] || [ -L "$install_root" ]; then
@@ -187,7 +192,7 @@ fi
 mv "$transaction_dir/new" "$install_root"
 committed=true
 
-echo "Installed Encore $package_version in $install_root"
+echo "Installed Encore $package_release in $install_root"
 case ":${PATH}:" in
     *":$install_root/bin:"*) ;;
     *) echo "Add $install_root/bin to PATH" ;;

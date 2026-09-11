@@ -1,6 +1,0 @@
-[project]
-name = "tuple_array"
-version = "0.1.0"
-description = "Rust-like tuple/array smoke example"
-readme = "README.md"
-dependencies = []

@@ -9,19 +9,29 @@ fn count_code(source: str, code: str) -> usize {
     let config = AnalyzerConfig::new()
     let mut count = 0_usize
     for diagnostic in analyze_document("src/lib.enq", document, config) {
-        if diagnostic.code == code { count += 1_usize }
+        if diagnostic.code == code {
+            count += 1_usize
+        }
     }
     ret count
 }
 
 fn main() -> u32 {
     let documented = "//! Values.\n/// A value.\npub struct Value {\n/// Stored data.\ndata: u32\n}\n"
-    if !assert(count_code(documented, "missing-module-docstring") == 0_usize) { ret 1_u32 }
-    if !assert(count_code(documented, "missing-public-docstring") == 0_usize) { ret 2_u32 }
+    if !assert(count_code(documented, "missing-module-docstring") == 0_usize) {
+        ret 1_u32
+    }
+    if !assert(count_code(documented, "missing-public-docstring") == 0_usize) {
+        ret 2_u32
+    }
 
     let missing = "pub struct Packet { payload: u32 }\npub enum State { Ready }\npub trait Service { fn call(self: Self) -> u32 }\n"
-    if !assert(count_code(missing, "missing-module-docstring") == 1_usize) { ret 3_u32 }
-    if !assert(count_code(missing, "missing-public-docstring") == 0_usize) { ret 4_u32 }
+    if !assert(count_code(missing, "missing-module-docstring") == 1_usize) {
+        ret 3_u32
+    }
+    if !assert(count_code(missing, "missing-public-docstring") == 0_usize) {
+        ret 4_u32
+    }
 
     let document = analyze_source(missing)
     let mut config = AnalyzerConfig::new()
@@ -29,11 +39,41 @@ fn main() -> u32 {
     config.set_level("missing-public-docstring", RuleLevel::Deny)
     let diagnostics = analyze_document("src/lib.enq", document, config)
     for diagnostic in diagnostics {
-        if !assert(diagnostic.code == "missing-public-docstring") { ret 5_u32 }
-        if !assert(diagnostic.severity == RuleLevel::Deny) { ret 6_u32 }
-        if !assert(diagnostic.path == "src/lib.enq") { ret 7_u32 }
+        if !assert(diagnostic.code == "missing-public-docstring") {
+            ret 5_u32
+        }
+        if !assert(diagnostic.severity == RuleLevel::Deny) {
+            ret 6_u32
+        }
+        if !assert(diagnostic.path == "src/lib.enq") {
+            ret 7_u32
+        }
     }
     let mutable_receiver = "fn view() -> Widget {\nlet mut root = Widget::panel(\"root\")\nroot.push(Widget::label(\"Child\"))\nret root\n}\n"
-    if !assert(count_code(mutable_receiver, "unused-mut") == 0_usize) { ret 8_u32 }
+    if !assert(count_code(mutable_receiver, "unused-mut") == 0_usize) {
+        ret 8_u32
+    }
+    let interpolated = "import std::os::{args, os_name}\nfn main() -> str { let count = args().len() ret f\"{os_name()}: {count} args\" }\n"
+    if !assert(count_code(interpolated, "unused-imports") == 0_usize) {
+        ret 9_u32
+    }
+    if !assert(count_code(interpolated, "unused-variables") == 0_usize) {
+        ret 10_u32
+    }
+    let literal = "import std::os::os_name\nfn main() -> str { let count = 1_u32 ret \"os_name count\" }\n"
+    if !assert(count_code(literal, "unused-imports") == 1_usize) {
+        ret 11_u32
+    }
+    if !assert(count_code(literal, "unused-variables") == 1_usize) {
+        ret 12_u32
+    }
+    let spaced = "fn helper() -> u32 { ret 1_u32 }\nfn main() -> str { ret f \"value: {helper()}\" }\n"
+    if !assert(count_code(spaced, "dead-code") == 0_usize) {
+        ret 13_u32
+    }
+    let text_only = "fn main() -> str { let unused = 1_u32 ret f\"unused {42_u32}\" }\n"
+    if !assert(count_code(text_only, "unused-variables") == 1_usize) {
+        ret 14_u32
+    }
     ret 0_u32
 }

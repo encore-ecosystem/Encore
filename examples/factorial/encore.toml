@@ -1,7 +1,0 @@
-[project]
-name = "factorial"
-version = "0.0.0"
-description = ""
-readme = "README.md"
-licence = "MIT"
-dependencies = ["path@../../../encore-index/packages/std"]

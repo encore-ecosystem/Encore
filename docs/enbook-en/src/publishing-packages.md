@@ -6,11 +6,13 @@ metadata catalog. Package source can live in any public GitHub repository. A
 published version is a maintainer-created `.tar.gz` asset attached to a GitHub
 Release; automatically generated source archives are not used.
 
-Encore 0.2.1 automates the release and reviewed index pull request:
+Encore automates the named release and reviewed index pull request:
 
 ```sh
 encore publish --dry-run
 encore publish
+# Override the release nametag without changing the registry epoch.
+encore publish --release-name neumann
 ```
 
 The dry run performs the same local verification and creates the exact archive
@@ -34,7 +36,7 @@ Letters, digits, `-`, and `_` are accepted.
 name = "example_math"
 version = "1.0.0"
 repository = "https://github.com/owner/example_math"
-encore = ">=0.2.1, <0.3.0"
+encore = ">=0.0.0"
 description = "Math helpers for Encore"
 readme = "README.md"
 licence = "MIT"
@@ -58,8 +60,10 @@ encore test
 encore build
 ```
 
-Published manifests must not contain `path@` dependencies. Replace dependencies
-on separately published packages with `index@name`. A private refrain may use
+Published manifests must not contain `path@` dependencies. The publisher rewrites
+local dependencies to exact `index@name@version` references in the staged archive,
+without changing the source manifest. Those packages must be published before
+consumers can resolve the archive. A private refrain may use
 `workspace@name` when its complete package is included at `workspace/name` in
 the same release archive. Do not include `.git`, `target`, or machine-specific
 files.
@@ -100,12 +104,20 @@ sha256sum example_math-1.0.0.tar.gz
 The listing must contain `encore.toml` at the archive root and must not contain
 absolute paths or `..` components.
 
-Create a tag and upload the exact archive as a release asset:
+Named package releases use a nametag while manifests keep a SemVer version.
+The registry epoch is a separate compatibility generation: it stays `neumann`
+across subsequent named releases until an explicit index reset. The compiler
+records that generation independently of its own release name. Publication
+checks the upstream `index.json` before submitting an index update and refuses
+an incompatible epoch. `--release-only` uploads the immutable package without
+an index PR; it is reserved for staging coordinated index cutovers.
+
+For example:
 
 ```sh
-git tag -s v1.0.0 -m "example_math v1.0.0"
-git push origin v1.0.0
-gh release create v1.0.0 \
+git tag -s example_math-v1.0.0-neumann -m "example_math 1.0.0-neumann"
+git push origin example_math-v1.0.0-neumann
+gh release create example_math-v1.0.0-neumann \
   example_math-1.0.0.tar.gz \
   --title "example_math 1.0.0"
 ```
@@ -130,7 +142,10 @@ For a new package, create:
   "versions": [
     {
       "version": "1.0.0",
-      "archive": "https://github.com/author/example_math/releases/download/v1.0.0/example_math-1.0.0.tar.gz",
+      "epoch": "neumann",
+      "nametag": "neumann",
+      "release": "1.0.0-neumann",
+      "archive": "https://github.com/author/example_math/releases/download/example_math-v1.0.0-neumann/example_math-1.0.0.tar.gz",
       "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "yanked": false
     }

@@ -15,3 +15,4 @@ vgcore*
 target
 !src/target/
 !src/target/**
+.encore_cache

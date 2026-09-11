@@ -1,0 +1,12 @@
+// @expect.compile_error=unknown variable 'values'
+import core::vec::Vec
+
+fn count(values: sending Vec[str]) -> usize {
+    ret values.len()
+}
+
+fn main() -> u32 {
+    let values = Vec[str]::new()
+    let worker = spawn count(values)
+    ret (worker.join() + values.len()) as u32
+}

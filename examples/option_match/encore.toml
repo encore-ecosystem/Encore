@@ -1,6 +1,0 @@
-[project]
-name = "option_match"
-version = "0.1.0"
-description = "Option[T] match smoke"
-readme = "README.md"
-dependencies = []

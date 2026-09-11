@@ -237,3 +237,15 @@ pub fn native_clock() -> u64 {
 }
 // ANCHOR_END: unsafe
 
+#attr(test)
+fn book_feature_examples() -> bool {
+    let values = literals()
+    ret documented() == 42_u32 && imported_api() && bindings() == 9_usize
+        && values.0 == 255_u32 && greeting("reader", 2_u32) == "Hello, reader; count=2"
+        && collections() == 42_u32 && operators(3_u16) == 14_u64
+        && add(20_u32, 22_u32) == 42_u32 && decorated(7_u32) == 7_u32
+        && message_value(Message::Value(42_u32)) == 42_u32
+        && classify(-1_i32) == "negative" && sum(4_usize) == 6_usize
+        && doubled(21_i32).unwrap_or(0_u32) == 42_u32
+        && run_async() == 42_u32 && run_worker() == 42_u32 && expanded() == 42_u32
+}

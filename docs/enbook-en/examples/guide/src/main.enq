@@ -1,7 +1,18 @@
+//! Builds every book module and runs a small non-interactive smoke check.
+
 import enbook_examples::core_examples
 import enbook_examples::features
 import enbook_examples::std_examples
+import enbook_examples::tutorial
 
 fn main() -> u32 {
-    ret 0_u32
+    let report = tutorial::analyze("one two\n")
+    ret if core_examples::widen(7_u16) == 7_u64
+    && features::add(20_u32, 22_u32) == 42_u32
+    && std_examples::owned_string("  Encore  ").as_str() == "Encore"
+    && report.words == 2_usize {
+        0_u32
+    } else {
+        1_u32
+    }
 }

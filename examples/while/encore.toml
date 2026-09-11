@@ -1,6 +1,0 @@
-[project]
-name = "while"
-version = "0.1.0"
-description = "Simple example of while loop"
-readme = "README.md"
-dependencies = []

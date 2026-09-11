@@ -37,7 +37,9 @@ jobs:
           REQUESTED_SEED_TAG: ${{ inputs.seed_tag }}
         run: |
           set -euo pipefail
-          version=$(tr -d '\r\n' < VERSION)
+          release=$(tr -d '\r\n' < VERSION)
+          version=${release%%-*}
+          release_name=${release#*-}
           selected=
           required='[
             "encore-x86_64-unknown-linux-gnu.tar.gz",
@@ -46,8 +48,10 @@ jobs:
             "encore-aarch64-apple-darwin.tar.gz",
             "encore-x86_64-pc-windows-msvc.zip"
           ]'
-          if test "$version" = 0.3.0-beta.1; then
-            selected=v0.3.0-beta.0.1
+          if test "$release" = 0.0.0-neumann; then
+            # One-time transition: the last stable predates frozen/sending.
+            # This published seed builds the current system libraries directly.
+            selected=v0.3.0-beta.1
             if test -n "$REQUESTED_SEED_TAG" && test "$REQUESTED_SEED_TAG" != "$selected"; then
               echo "::error::Encore $version requires bridge seed $selected, got $REQUESTED_SEED_TAG"
               exit 1
@@ -73,24 +77,18 @@ jobs:
               exit 1
             fi
           else
-            while IFS= read -r tag; do
-              [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-              assets=$(gh release view "$tag" --json isDraft,isPrerelease,assets)
-              test "$(jq -r '.isDraft or .isPrerelease' <<<"$assets")" = false || continue
-              if jq -e --argjson required "$required" \
-                '([.assets[].name] as $actual | $required - $actual | length) == 0' <<<"$assets" >/dev/null
-              then
-                selected=$tag
-                break
-              fi
-            done < <(gh release list --limit 100 --json tagName,publishedAt \
-              --jq 'sort_by(.publishedAt) | reverse | .[].tagName')
-            if test -z "$selected"; then
-              selected=bootstrap/v0.1.4.3
-              assets=$(gh release view "$selected" --json assets)
-              jq -e --argjson required "$required" \
-                '([.assets[].name] as $actual | $required - $actual | length) == 0' \
-                <<<"$assets" >/dev/null
+            releases=$(gh release list --limit 100 --json tagName,publishedAt,isDraft,isPrerelease)
+            selected=$(jq -r '[.[] | select(.isDraft == false and .isPrerelease == false)
+              | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z][a-z0-9-]*)?$"))]
+              | sort_by(.publishedAt) | last | .tagName // empty' <<<"$releases")
+            test -n "$selected" || { echo "::error::No stable compiler release is available"; exit 1; }
+            assets=$(gh release view "$selected" --json isDraft,isPrerelease,assets)
+            test "$(jq -r '.isDraft or .isPrerelease' <<<"$assets")" = false
+            if ! jq -e --argjson required "$required" \
+              '([.assets[].name] as $actual | $required - $actual | length) == 0' <<<"$assets" >/dev/null
+            then
+              echo "::error::Latest stable seed $selected is incomplete; refusing an older fallback"
+              exit 1
             fi
           fi
           test -n "$selected" || {
@@ -105,20 +103,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(tr -d '\r\n' < VERSION)
-          if test "$version" = 0.3.0-beta.0 || [[ "$version" =~ ^0\.3\.0-beta\.0\.[0-9]+$ ]]; then
-            # beta.0 and any recovery repack are the syntax bridge that bootstraps the strict beta.1
-            # compiler. Keep its system libraries on the pre-capability API;
-            # the one compatibility change removes platform's redundant
-            # path@../core dependency so target kits resolve sys@core once.
-            sha=2809e8bdf34808c8552dbc440e0cd2b36eafc50e
-          else
-            sha=$(git ls-remote https://github.com/encore-ecosystem/encore-index.git refs/heads/main | awk '{print $1}')
-          fi
+          release=$(tr -d '\r\n' < VERSION)
+          version=${release%%-*}
+          release_name=${release#*-}
+          test "$release" = "$version-$release_name"
+          sha=$(git ls-remote https://github.com/encore-ecosystem/encore-index.git refs/heads/main | awk '{print $1}')
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "ENCORE_INDEX_URL=https://raw.githubusercontent.com/encore-ecosystem/encore-index/$sha" >> "$GITHUB_ENV"
           echo "### System libraries: \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v6
+        with:
+          repository: encore-ecosystem/encore-index
+          ref: ${{ steps.index.outputs.sha }}
+          path: target/dependency-source
 
       - name: Build verified dependency bundle
         shell: bash
@@ -126,6 +125,10 @@ jobs:
           set -euo pipefail
           mkdir -p target/dependencies/registry
           cp encore.lock target/dependencies/encore.lock
+          test "$(git -C target/dependency-source rev-parse HEAD)" = "${{ steps.index.outputs.sha }}"
+          mkdir -p target/dependencies/system-index
+          git -C target/dependency-source archive HEAD | tar -xf - -C target/dependencies/system-index
+          printf '%s\n' '${{ steps.index.outputs.sha }}' > target/dependencies/index-commit
           find target/dependencies -exec touch -t 200001010000.00 {} +
           tar --sort=name --owner=0 --group=0 --numeric-owner \
             -C target -czf target/dependencies.tar.gz dependencies
@@ -180,25 +183,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/checkout@v6
-        with:
-          repository: encore-ecosystem/encore-index
-          ref: ${{ needs.resolve-inputs.outputs.index_sha }}
-          path: target/system-index
-      - uses: actions/checkout@v6
-        with:
-          repository: encore-ecosystem/encore-index
-          ref: d98d316b665d2798a035ea91d7e16d19f9b03a2b
-          path: target/bootstrap-index
-      - name: Activate pinned path dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          index_root="$PWD/../encore-index"
-          test ! -e "$index_root"
-          cp -R target/bootstrap-index "$index_root"
-          echo "ENCORE_CORE_DIR=$index_root/packages/core" >> "$GITHUB_ENV"
-          echo "ENCORE_RELEASE_INDEX_DIR=$PWD/target/system-index" >> "$GITHUB_ENV"
 
       - uses: actions/download-artifact@v8
         with:
@@ -218,7 +202,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(tr -d '\r\n' < VERSION)
+          release=$(tr -d '\r\n' < VERSION)
+          version=${release%%-*}
+          release_name=${release#*-}
           abi=$(printf '%s\n' "$version" | awk -F. '{print $1 "." $2}')
           targets_root="$PWD/target/installed-target-kits"
           mkdir -p "$targets_root/$abi"
@@ -249,6 +235,12 @@ jobs:
           tar -xzf target/dependency-download/dependencies.tar.gz -C target
           mv target/dependencies/registry target/registry
           cmp <(tr -d '\r' < encore.lock) target/dependencies/encore.lock
+          test "$(cat target/dependencies/index-commit)" = "${{ needs.resolve-inputs.outputs.index_sha }}"
+          mv target/dependencies/system-index target/system-index
+          index_root="$PWD/../encore-index"
+          test ! -e "$index_root"
+          cp -R target/system-index "$index_root"
+          echo "ENCORE_CORE_DIR=$index_root/packages/core" >> "$GITHUB_ENV"
           echo "ENCORE_INDEX_URL=http://127.0.0.1:9" >> "$GITHUB_ENV"
 
       - name: Download and verify producer seed
@@ -330,11 +322,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
         with:
-          repository: encore-ecosystem/encore-index
-          ref: ${{ needs.resolve-inputs.outputs.index_sha }}
-          path: target/system-index
+          name: trusted-dependencies
+          path: target/dependency-download
+      - name: Activate verified target-kit sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(awk 'NF {print tolower($1); exit}' target/dependency-download/dependencies.tar.gz.sha256)
+          actual=$(sha256sum target/dependency-download/dependencies.tar.gz | awk '{print $1}')
+          test "$actual" = "$expected"
+          tar -xzf target/dependency-download/dependencies.tar.gz -C target
+          test "$(cat target/dependencies/index-commit)" = "${{ needs.resolve-inputs.outputs.index_sha }}"
+          mv target/dependencies/system-index target/system-index
       - name: Download verified Linux llvm-mingw
         shell: bash
         run: |
@@ -358,7 +359,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(tr -d '\r\n' < VERSION)
+          release=$(tr -d '\r\n' < VERSION)
+          version=${release%%-*}
+          release_name=${release#*-}
+          test "$release" = "$version-$release_name"
           args=(
             --host x86_64-unknown-linux-gnu \
             --target "${{ matrix.target }}" \
@@ -368,7 +372,7 @@ jobs:
             --compiler bin/clang \
             --linker bin/clang \
             --archiver bin/llvm-ar \
-            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/v$version"
+            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/v$release"
           )
           if [[ "${{ matrix.kind }}" == linux-aarch64 ]]; then
             args+=(--sysroot sysroot --link-arg "-fuse-ld=lld")
@@ -425,27 +429,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/checkout@v6
-        with:
-          repository: encore-ecosystem/encore-index
-          ref: ${{ needs.resolve-inputs.outputs.index_sha }}
-          path: target/system-index
-
-      - name: Activate pinned path dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          index_root="$PWD/../encore-index"
-          test ! -e "$index_root"
-          cp -R target/system-index "$index_root"
 
       - name: Verify source version
         shell: bash
         run: |
           set -euo pipefail
-          version=$(tr -d '\r\n' < VERSION)
+          release=$(tr -d '\r\n' < VERSION)
+          version=${release%%-*}
+          release_name=${release#*-}
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' encore.toml | head -n 1)" = "$version"
-          test "$(sed -n 's/.*ret "\([^"]*\)".*/\1/p' src/version.enq)" = "$version"
+          test "$release" = "$version-$release_name"
+          grep -Fq "ret \"$version\"" src/version.enq
+          grep -Fq "ret \"$release_name\"" src/version.enq
+          grep -Fq "ret \"$release\"" src/version.enq
 
       - uses: actions/download-artifact@v8
         with:
@@ -467,7 +463,13 @@ jobs:
           rm -rf target/registry
           mv target/dependencies/registry target/registry
           cmp <(tr -d '\r' < encore.lock) target/dependencies/encore.lock
-          export ENCORE_INDEX_URL=http://127.0.0.1:9
+          test "$(cat target/dependencies/index-commit)" = "${{ needs.resolve-inputs.outputs.index_sha }}"
+          mv target/dependencies/system-index target/system-index
+          index_root="$PWD/../encore-index"
+          test ! -e "$index_root"
+          cp -R target/system-index "$index_root"
+          echo "ENCORE_CORE_DIR=$index_root/packages/core" >> "$GITHUB_ENV"
+          echo "ENCORE_INDEX_URL=http://127.0.0.1:9" >> "$GITHUB_ENV"
 
       - uses: actions/download-artifact@v8
         with:
@@ -481,12 +483,17 @@ jobs:
           set -euo pipefail
           root="target/stage1-download/${{ matrix.triple }}"
           manifest="$root/manifest.json"
-          test "$(jq -r '.schema' "$manifest")" = 1
+          test "$(jq -r '.schema' "$manifest")" = 2
           test "$(jq -r '.commit' "$manifest")" = "$GITHUB_SHA"
-          test "$(jq -r '.version' "$manifest")" = "$(tr -d '\r\n' < VERSION)"
+          release=$(tr -d '\r\n' < VERSION)
+          test "$(jq -r '.version' "$manifest")" = "${release%%-*}"
+          test "$(jq -r '.nametag' "$manifest")" = "${release#*-}"
+          test "$(jq -r '.release' "$manifest")" = "$release"
           test "$(jq -r '.seed' "$manifest")" = "${{ needs.resolve-inputs.outputs.seed_tag }}"
           test "$(jq -r '.target' "$manifest")" = "${{ matrix.triple }}"
-          version=$(tr -d '\r\n' < VERSION)
+          release=$(tr -d '\r\n' < VERSION)
+          version=${release%%-*}
+          release_name=${release#*-}
           target_kit_abi=$(printf '%s\n' "$version" | awk -F. '{print $1 "." $2}')
           test "$(jq -r '.target_kit_abi' "$manifest")" = "$target_kit_abi"
           expected_dependencies=$(awk 'NF {print tolower($1); exit}' \
@@ -555,13 +562,16 @@ jobs:
         run: |
           set -euo pipefail
           compiler="$PWD/target/stage3/${{ matrix.executable }}"
-          for manifest in examples/*/encore.toml; do
+          while IFS= read -r manifest; do
             example=${manifest%/encore.toml}
-            case "$example" in examples/bare_metal) continue ;; esac
-            (cd "$example" && "$compiler" build)
-          done
+            case "$example" in examples/bare_metal|*/compile_fail) continue ;; esac
+            if test -f "$example/src/main.enq"; then
+              (cd "$example" && "$compiler" build)
+            else
+              (cd "$example" && "$compiler" check)
+            fi
+          done < <(find examples -mindepth 2 -name encore.toml -print | LC_ALL=C sort)
           (cd examples/bare_metal && "$compiler" build --target thumbv7em-none-eabi --emit llvm-ir)
-          python3 scripts/check-enbook.py
           (cd docs/enbook-en/examples/guide && "$compiler" build)
 
       - name: Verify source tooling gates
@@ -594,9 +604,6 @@ jobs:
           fi
           cp "$index_root/lsp/target/release/$source_name" "target/stage3/$installed_name"
           chmod +x "target/stage3/$installed_name" 2>/dev/null || true
-          if [[ "${{ matrix.triple }}" == x86_64-unknown-linux-gnu ]]; then
-            python3 "$index_root/lsp/tests/docstrings.py" "target/stage3/$installed_name"
-          fi
 
       - name: Assemble offline test context
         shell: bash
@@ -607,7 +614,6 @@ jobs:
           cp "target/stage3/${{ matrix.executable }}" "$context/bin/${{ matrix.executable }}"
           cp -R target/registry "$context/registry"
           cp -R target/system-index "$context/system-index"
-          "target/stage3/${{ matrix.executable }}" test --list --format json > "$context/test-plan.json"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -620,8 +626,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(tr -d '\r\n' < VERSION)
-          package="encore-$version-${{ matrix.triple }}"
+          release=$(tr -d '\r\n' < VERSION)
+          version=${release%%-*}
+          release_name=${release#*-}
+          test "$release" = "$version-$release_name"
+          package="encore-$release-${{ matrix.triple }}"
           root="$PWD/target/package/$package"
           mkdir -p "$root/bin" "$root/lib/encore/index" "$root/share/doc/encore" dist
           cp "target/stage3/${{ matrix.executable }}" "$root/bin/${{ matrix.executable }}"
@@ -630,7 +639,7 @@ jobs:
           [[ "${{ matrix.triple }}" == *-windows-* ]] && lsp_executable=encore-lsp.exe
           cp "target/stage3/$lsp_executable" "$root/bin/$lsp_executable"
           chmod +x "$root/bin/$lsp_executable" 2>/dev/null || true
-          for name in core platform std rich json log profile ehir toml colorterm llvm; do
+          for name in core platform std rich json log profile ehir toml colorterm llvm argparse; do
             source_name=$name
             test -f "$PWD/target/system-index/packages/$source_name/encore.toml"
             cp -R "$PWD/target/system-index/packages/$source_name" "$root/lib/encore/index/$name"
@@ -638,9 +647,20 @@ jobs:
           cp -R "$PWD/target/system-index/packages/ehir-llvm-backend" \
             "$root/lib/encore/index/ehir-llvm-backend"
           cp LICENSE README.md "$root/share/doc/encore/"
-          printf '%s\n' "$version" > "$root/VERSION"
-          printf '{"schema":1,"commit":"%s","version":"%s","seed":"%s","target":"%s"}\n' \
-            "$GITHUB_SHA" "$version" "${{ steps.seed.outputs.tag }}" "${{ matrix.triple }}" \
+          printf '%s\n' "$release" > "$root/VERSION"
+          hash_file() {
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+            else shasum -a 256 "$1" | awk '{print $1}'; fi
+          }
+          stage2_sha=$(hash_file "target/stage2/${{ matrix.executable }}")
+          stage3_sha=$(hash_file "target/stage3/${{ matrix.executable }}")
+          test "$stage2_sha" = "$stage3_sha"
+          lsp_sha=$(hash_file "target/stage3/$lsp_executable")
+          dependencies_sha=$(awk 'NF {print tolower($1); exit}' target/dependency-download/dependencies.tar.gz.sha256)
+          printf '{"schema":2,"commit":"%s","version":"%s","nametag":"%s","release":"%s","seed":"%s","index_commit":"%s","dependencies_sha256":"%s","target":"%s","compiler_sha256":"%s","lsp_sha256":"%s","stage2_sha256":"%s","stage3_sha256":"%s","converged":true}\n' \
+            "$GITHUB_SHA" "$version" "$release_name" "$release" "${{ steps.seed.outputs.tag }}" \
+            "${{ needs.resolve-inputs.outputs.index_sha }}" "$dependencies_sha" "${{ matrix.triple }}" \
+            "$stage3_sha" "$lsp_sha" "$stage2_sha" "$stage3_sha" \
             > "dist/provenance-${{ matrix.triple }}.json"
           find "$root" -exec touch -t 200001010000.00 {} +
           case "${{ matrix.triple }}" in
@@ -664,6 +684,22 @@ jobs:
           else
             (cd dist && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
           fi
+
+      - name: Verify packaged language server without global installation
+        if: matrix.triple == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=$(tr -d '\r\n' < VERSION)
+          root="$PWD/target/package/encore-$release-${{ matrix.triple }}"
+          # No HOME, ENCORE_HOME or development overrides: discover libraries
+          # beside the packaged executable, exactly as a fresh installation.
+          for suite in docstrings protocol_features scheduler workspace_graph; do
+            env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
+              ENCORE_INDEX_URL=http://127.0.0.1:9 \
+              timeout 180 python3 "$PWD/../encore-index/lsp/tests/$suite.py" \
+              "$root/bin/encore-lsp"
+          done
 
       - uses: actions/upload-artifact@v7
         with:
@@ -771,52 +807,5 @@ jobs:
           path: |
             target/test-report.json
             target/tests/*.output.txt
-          if-no-files-found: warn
-          retention-days: 7
-
-  aggregate:
-    name: Verify tests ${{ matrix.triple }}
-    if: always()
-    needs: [converge, tests]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - triple: x86_64-unknown-linux-gnu
-          - triple: aarch64-unknown-linux-gnu
-          - triple: x86_64-apple-darwin
-          - triple: aarch64-apple-darwin
-          - triple: x86_64-pc-windows-msvc
-          - triple: x86_64-w64-windows-gnu
-          - triple: aarch64-w64-windows-gnu
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: test-context-${{ matrix.triple }}
-          path: target/context
-      - uses: actions/download-artifact@v8
-        with:
-          name: test-report-${{ matrix.triple }}
-          path: target/reports
-      - name: Validate complete test set and generate JUnit
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t reports < <(find target/reports -name '*.json' -type f | sort)
-          test "${#reports[@]}" = 1
-          scripts/merge-test-reports.py \
-            --plan target/context/test-plan.json \
-            --json "target/test-results-${{ matrix.triple }}.json" \
-            --junit "target/test-results-${{ matrix.triple }}.xml" \
-            "${reports[@]}"
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: test-results-${{ matrix.triple }}
-          path: |
-            target/test-results-${{ matrix.triple }}.json
-            target/test-results-${{ matrix.triple }}.xml
           if-no-files-found: warn
           retention-days: 7

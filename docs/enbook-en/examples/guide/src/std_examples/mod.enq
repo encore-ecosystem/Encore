@@ -1,3 +1,5 @@
+//! Source-backed examples for standard library chapters.
+
 // ANCHOR: default
 import std::default::Default
 struct Configuration {

@@ -1,0 +1,57 @@
+import core::testing::assert
+import std::thread::JoinHandle
+import std::time::sleep_ms
+
+extern fn encore_async_waker_new() -> usize
+extern fn encore_async_waker_wait(token: usize) ->()
+extern fn encore_async_waker_wake(token: usize) ->()
+extern fn encore_async_waker_drop(token: usize) ->()
+
+struct PendingValue {
+    handle: JoinHandle[u32]
+}
+
+fn delayed_value(gate: usize) -> u32 {
+    // The native event is synchronized; main owns it until after join.
+    unsafe {
+        encore_async_waker_wait(gate)
+    }
+    ret 42_u32
+}
+
+fn main() -> u32 {
+    let gate = unsafe {
+        encore_async_waker_new()
+    }
+    if gate == 0_usize {
+        ret 4_u32
+    }
+    let worker = PendingValue {
+        spawn delayed_value(gate)
+    }
+    let pending = !worker.handle.is_finished()
+    // Always release the worker before any assertion can leave this scope.
+    unsafe {
+        encore_async_waker_wake(gate)
+    }
+    let mut attempts = 0_u32
+    while !worker.handle.is_finished() && attempts < 10000_u32 {
+        sleep_ms(1_u64)
+        attempts += 1_u32
+    }
+    let finished = worker.handle.is_finished()
+    let value = worker.handle.join()
+    unsafe {
+        encore_async_waker_drop(gate)
+    }
+    if !assert(pending) {
+        ret 1_u32
+    }
+    if !assert(finished) {
+        ret 2_u32
+    }
+    if !assert(value == 42_u32) {
+        ret 3_u32
+    }
+    ret 0_u32
+}

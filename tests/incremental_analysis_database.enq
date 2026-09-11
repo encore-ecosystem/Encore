@@ -2,28 +2,44 @@
 
 import core::option::Option
 import core::testing::assert
-import refrain::frontend::{AnalysisDatabase, FrontendDocument, ModuleId, SymbolId}
+import refrain::frontend::{AnalysisDatabase, FrontendDocument, ModuleId, PreparedLightweightModule, SymbolId, check_prepared_semantic_workspace, prepare_lightweight_module}
+
+fn prepare_on_worker(module_name: str, source_name: str, source: str) -> sending PreparedLightweightModule {
+    ret prepare_lightweight_module(module_name, source_name, source)
+}
 
 fn require_module_id(database: AnalysisDatabase, name: str) -> ModuleId {
     match database.module_id(name) {
-        Option[ModuleId]::Some(id) => { ret id }
-        Option[ModuleId]::None => { ret ModuleId::invalid() }
+        Option[ModuleId]::Some(id) => {
+            ret id
+        }
+        Option[ModuleId]::None => {
+            ret ModuleId::invalid()
+        }
     }
     ret ModuleId::invalid()
 }
 
 fn require_symbol_id(database: mut AnalysisDatabase, module_name: str, name: str) -> SymbolId {
     match database.symbol_id(module_name, name) {
-        Option[SymbolId]::Some(id) => { ret id }
-        Option[SymbolId]::None => { ret SymbolId::invalid() }
+        Option[SymbolId]::Some(id) => {
+            ret id
+        }
+        Option[SymbolId]::None => {
+            ret SymbolId::invalid()
+        }
     }
     ret SymbolId::invalid()
 }
 
 fn require_document(database: mut AnalysisDatabase, module_name: str) -> FrontendDocument {
     match database.document(module_name) {
-        Option[FrontendDocument]::Some(document) => { ret document }
-        Option[FrontendDocument]::None => { ret FrontendDocument::empty() }
+        Option[FrontendDocument]::Some(document) => {
+            ret document
+        }
+        Option[FrontendDocument]::None => {
+            ret FrontendDocument::empty()
+        }
     }
     ret FrontendDocument::empty()
 }
@@ -40,16 +56,30 @@ fn main() -> u32 {
 
     // Re-sending identical editor contents is a true no-op.
     database.set_module("library", "library.enq", library_v1)
-    if !assert(database.revision() == initial_revision) { ret 1_u32 }
-    if !assert(require_module_id(database, "library").value() == library_id.value()) { ret 2_u32 }
+    if !assert(database.revision() == initial_revision) {
+        ret 1_u32
+    }
+    if !assert(require_module_id(database, "library").value() == library_id.value()) {
+        ret 2_u32
+    }
 
     let lightweight = database.document_lightweight("library").unwrap_or(FrontendDocument::empty())
-    if !assert(lightweight.parsed) { ret 3_u32 }
-    if !assert(lightweight.ast.len() == 0_usize) { ret 4_u32 }
+    if !assert(lightweight.parsed) {
+        ret 3_u32
+    }
+    if !assert(lightweight.ast.len() == 0_usize) {
+        ret 4_u32
+    }
     let full = require_document(database, "library")
-    if !assert(full.ast.len() == 1_usize) { ret 5_u32 }
-    if !assert(database.module_lightweight_count("library") == 1_usize) { ret 6_u32 }
-    if !assert(database.module_parse_count("library") == 1_usize) { ret 7_u32 }
+    if !assert(full.ast.len() == 1_usize) {
+        ret 5_u32
+    }
+    if !assert(database.module_lightweight_count("library") == 1_usize) {
+        ret 6_u32
+    }
+    if !assert(database.module_parse_count("library") == 1_usize) {
+        ret 7_u32
+    }
 
     require_document(database, "application")
     let app_parse_count = database.module_parse_count("application")
@@ -59,55 +89,93 @@ fn main() -> u32 {
     // A body-only change reparses the defining module but preserves its
     // interface and every dependant query.
     database.set_module("library", "library.enq", "pub fn answer() -> u32 { ret 42_u32 }\n")
-    if !assert(!database.module_is_dirty("application")) { ret 8_u32 }
+    if !assert(!database.module_is_dirty("application")) {
+        ret 8_u32
+    }
     require_document(database, "library")
     require_document(database, "application")
-    if !assert(database.module_parse_count("application") == app_parse_count) { ret 9_u32 }
-    if !assert(database.module_interface_revision("library") == interface_revision) { ret 10_u32 }
-    if !assert(require_module_id(database, "library").value() == library_id.value()) { ret 11_u32 }
-    if !assert(require_symbol_id(database, "library", "answer").value() == answer_id.value()) { ret 12_u32 }
+    if !assert(database.module_parse_count("application") == app_parse_count) {
+        ret 9_u32
+    }
+    if !assert(database.module_interface_revision("library") == interface_revision) {
+        ret 10_u32
+    }
+    if !assert(require_module_id(database, "library").value() == library_id.value()) {
+        ret 11_u32
+    }
+    if !assert(require_symbol_id(database, "library", "answer").value() == answer_id.value()) {
+        ret 12_u32
+    }
 
     // A public signature change invalidates transitive dependants exactly once.
     database.set_module("library", "library.enq", "pub fn answer(value: u32) -> u32 { ret value }\n")
-    if !assert(database.module_is_dirty("application")) { ret 13_u32 }
-    if !assert(database.module_interface_revision("library") > interface_revision) { ret 14_u32 }
+    if !assert(database.module_is_dirty("application")) {
+        ret 13_u32
+    }
+    if !assert(database.module_interface_revision("library") > interface_revision) {
+        ret 14_u32
+    }
     require_document(database, "application")
-    if !assert(database.module_parse_count("application") == app_parse_count + 1_usize) { ret 15_u32 }
+    if !assert(database.module_parse_count("application") == app_parse_count + 1_usize) {
+        ret 15_u32
+    }
 
     // Adding an unrelated declaration before a symbol must not change its ID.
     database.set_module("library", "library.enq", "fn helper() -> u32 { ret 0_u32 }\npub fn answer(value: u32) -> u32 { ret value }\n")
-    if !assert(require_symbol_id(database, "library", "answer").value() == answer_id.value()) { ret 22_u32 }
+    if !assert(require_symbol_id(database, "library", "answer").value() == answer_id.value()) {
+        ret 22_u32
+    }
 
     // IDs are deterministic across database instances and insertion order so
     // future on-disk caches can persist them safely.
     let mut second_database = AnalysisDatabase::new()
     second_database.set_module("unrelated", "unrelated.enq", "fn local() -> u32 { ret 0_u32 }\n")
     second_database.set_module("library", "library.enq", "fn helper() -> u32 { ret 0_u32 }\npub fn answer(value: u32) -> u32 { ret value }\n")
-    if !assert(require_module_id(second_database, "library").key() == library_id.key()) { ret 25_u32 }
-    if !assert(require_symbol_id(second_database, "library", "answer").key() == answer_id.key()) { ret 26_u32 }
+    if !assert(require_module_id(second_database, "library").key() == library_id.key()) {
+        ret 25_u32
+    }
+    if !assert(require_symbol_id(second_database, "library", "answer").key() == answer_id.key()) {
+        ret 26_u32
+    }
 
     // Symbol IDs resolve through the database and survive source-position edits.
     let resolved = database.symbol_by_id(answer_id)
     match resolved {
         Option::Some(symbol) => {
-            if !assert(symbol.module_id.value() == library_id.value()) { ret 16_u32 }
-            if !assert(symbol.symbol.name == "answer") { ret 17_u32 }
+            if !assert(symbol.module_id.value() == library_id.value()) {
+                ret 16_u32
+            }
+            if !assert(symbol.symbol.name == "answer") {
+                ret 17_u32
+            }
         }
-        Option::None => { ret 18_u32 }
+        Option::None => {
+            ret 18_u32
+        }
     }
 
     database.remove_module("library")
-    if !assert(database.module_id("library").is_none()) { ret 19_u32 }
-    if !assert(database.symbol_by_id(answer_id).is_none()) { ret 20_u32 }
-    if !assert(database.module_is_dirty("application")) { ret 21_u32 }
+    if !assert(database.module_id("library").is_none()) {
+        ret 19_u32
+    }
+    if !assert(database.symbol_by_id(answer_id).is_none()) {
+        ret 20_u32
+    }
+    if !assert(database.module_is_dirty("application")) {
+        ret 21_u32
+    }
 
     // Compiler ingestion performs one strict query, not a lightweight pass
     // followed by a second parse.
     let mut compiler_database = AnalysisDatabase::new()
     compiler_database.set_module_full("main", "main.enq", "fn main() -> u32 { ret 0_u32 }\n")
     require_document(compiler_database, "main")
-    if !assert(compiler_database.module_lightweight_count("main") == 0_usize) { ret 23_u32 }
-    if !assert(compiler_database.module_parse_count("main") == 1_usize) { ret 24_u32 }
+    if !assert(compiler_database.module_lightweight_count("main") == 0_usize) {
+        ret 23_u32
+    }
+    if !assert(compiler_database.module_parse_count("main") == 1_usize) {
+        ret 24_u32
+    }
 
     let mut transitive = AnalysisDatabase::new()
     transitive.set_module("base", "base.enq", "pub fn value() -> u32 { ret 1_u32 }\n")
@@ -117,8 +185,12 @@ fn main() -> u32 {
     require_document(transitive, "middle")
     require_document(transitive, "top")
     transitive.set_module("base", "base.enq", "pub fn value(input: u32) -> u32 { ret input }\n")
-    if !assert(transitive.module_is_dirty("middle")) { ret 27_u32 }
-    if !assert(transitive.module_is_dirty("top")) { ret 28_u32 }
+    if !assert(transitive.module_is_dirty("middle")) {
+        ret 27_u32
+    }
+    if !assert(transitive.module_is_dirty("top")) {
+        ret 28_u32
+    }
 
     // Extern declarations have no body; the following type declaration must
     // still participate completely in the interface fingerprint.
@@ -126,25 +198,64 @@ fn main() -> u32 {
     surfaces.set_module("ffi", "ffi.enq", "extern fn native() -> u32\npub struct Packet { value: u32 }\nfn local() -> u32 { ret 1_u32 }\n")
     let surface_revision = surfaces.module_interface_revision("ffi")
     surfaces.set_module("ffi", "ffi.enq", "extern fn native() -> u32\npub struct Packet { value: u32 }\nfn local() -> u32 { ret 2_u32 }\n")
-    if !assert(surfaces.module_interface_revision("ffi") == surface_revision) { ret 29_u32 }
+    if !assert(surfaces.module_interface_revision("ffi") == surface_revision) {
+        ret 29_u32
+    }
     surfaces.set_module("ffi", "ffi.enq", "extern fn native() -> u32\npub struct Packet { value: u64 }\nfn local() -> u32 { ret 2_u32 }\n")
-    if !assert(surfaces.module_interface_revision("ffi") > surface_revision) { ret 30_u32 }
+    if !assert(surfaces.module_interface_revision("ffi") > surface_revision) {
+        ret 30_u32
+    }
 
     let mut scoped = AnalysisDatabase::new()
     scoped.set_module("methods", "methods.enq", "struct Left;\nstruct Right;\nimpl for Left { fn run(self: Self) -> u32 { ret 1_u32 } }\nimpl for Right { fn run(self: Self) -> u32 { ret 2_u32 } }\n")
     let methods = scoped.symbols_named("run")
-    if !assert(methods.len() == 2_usize) { ret 31_u32 }
+    if !assert(methods.len() == 2_usize) {
+        ret 31_u32
+    }
     match methods.get(0_usize) {
         Option::Some(left) => {
             match methods.get(1_usize) {
                 Option::Some(right) => {
-                    if !assert(left.id.key() != right.id.key()) { ret 32_u32 }
-                    if !assert(left.symbol.scope != right.symbol.scope) { ret 33_u32 }
+                    if !assert(left.id.key() != right.id.key()) {
+                        ret 32_u32
+                    }
+                    if !assert(left.symbol.scope != right.symbol.scope) {
+                        ret 33_u32
+                    }
                 }
-                Option::None => { ret 34_u32 }
+                Option::None => {
+                    ret 34_u32
+                }
             }
         }
-        Option::None => { ret 35_u32 }
+        Option::None => {
+            ret 35_u32
+        }
+    }
+
+    // Editor clients can move tolerant work off their state-owning thread and
+    // install the completed query without analyzing the source a second time.
+    let prepared = spawn prepare_on_worker("worker", "worker.enq", "pub fn ready() -> bool { ret true }\n")
+    let mut worker_database = AnalysisDatabase::new()
+    worker_database.apply_prepared_lightweight(prepared.join())
+    if !assert(worker_database.module_lightweight_count("worker") == 1_usize) {
+        ret 36_u32
+    }
+    if !assert(worker_database.document_lightweight("worker").is_some()) {
+        ret 37_u32
+    }
+    let semantic = spawn check_prepared_semantic_workspace(worker_database.prepare_semantic_workspace("worker"))
+    if !assert(semantic.join().len() == 0_usize) {
+        ret 38_u32
+    }
+
+    // A worker snapshot starts from lightweight documents. Its semantic pass
+    // must materialize the current module before collecting inherent methods.
+    let mut method_database = AnalysisDatabase::new()
+    method_database.set_module("method_user", "method_user.enq", "struct Config {}\nimpl for Config { fn enabled(self: Self) -> bool { ret true } }\nfn check() -> bool { let config = Config{} ret config.enabled() }\n")
+    let method_semantic = spawn check_prepared_semantic_workspace(method_database.prepare_semantic_workspace("method_user"))
+    if !assert(method_semantic.join().len() == 0_usize) {
+        ret 39_u32
     }
     ret 0_u32
 }

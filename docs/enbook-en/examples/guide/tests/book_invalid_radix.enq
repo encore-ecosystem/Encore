@@ -1,0 +1,4 @@
+// @expect.compile_error=error[unknown-token]
+fn main() -> u32 {
+    ret 0b102
+}

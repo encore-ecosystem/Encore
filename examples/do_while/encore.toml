@@ -1,6 +1,0 @@
-[project]
-name = "do_while"
-version = "0.1.0"
-description = "Simple example of do_while loop"
-readme = "README.md"
-dependencies = []

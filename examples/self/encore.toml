@@ -1,6 +1,0 @@
-[project]
-name = "self"
-version = "0.1.0"
-description = "Example of impl methods with shorthand self parameter"
-readme = "README.md"
-dependencies = []

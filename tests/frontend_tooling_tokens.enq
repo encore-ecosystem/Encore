@@ -1,0 +1,27 @@
+//! Verifies the public frontend contracts consumed by language servers.
+
+import core::testing::assert
+import refrain::frontend::{TokenType, analyze_source_lightweight, tooling_tokens}
+
+fn main() -> u32 {
+    let source = "fn connect(host: str, timeout: Option[u32]) -> u32 { ret 0_u32 }\n" +
+        "fn main() { let value = f\"{connect(1, Option::None)}\" }\n"
+    let document = analyze_source_lightweight(source)
+    match document.callables.get(0_usize) {
+        Some(callable) => {
+            if !assert(callable.params.len() == 2_usize) { ret 1_u32 }
+            if !assert(callable.params.get(0_usize).unwrap_or("") == "host: str") { ret 2_u32 }
+            if !assert(callable.params.get(1_usize).unwrap_or("") == "timeout: Option[u32]") { ret 3_u32 }
+        }
+        None => { ret 4_u32 }
+    }
+
+    let mut connect_count = 0_usize
+    for token in tooling_tokens(source) {
+        if token.type == TokenType::IDENTIFIER && token.value == "connect" {
+            connect_count += 1_usize
+        }
+    }
+    if !assert(connect_count == 2_usize) { ret 5_u32 }
+    ret 0_u32
+}

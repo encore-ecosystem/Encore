@@ -1,6 +1,0 @@
-[project]
-name = "compound_assign"
-version = "0.1.0"
-description = "Smoke example for compound assignment operators"
-readme = "README.md"
-dependencies = []

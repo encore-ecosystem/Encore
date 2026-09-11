@@ -1,6 +1,0 @@
-[project]
-name = "enum_match_mixed"
-version = "0.1.0"
-description = "Smoke example for enum + match with unit and payload variants"
-readme = "README.md"
-dependencies = []

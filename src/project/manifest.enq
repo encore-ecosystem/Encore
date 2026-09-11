@@ -3,16 +3,15 @@
 import core::option::Option
 import core::panic::panic
 import std::io::eprintln
-import std::process::exit
 import std::os::file_exists
 import std::os::read_file
 import std::os::write_file
 import std::path::Path
+import std::process::exit
 import std::vec::Vec
 
-import toml::{TomlDocument, toml_get_bool, toml_get_string, toml_get_string_array, toml_parse_document, toml_section_keys}
 import refrain::target::{TargetSpec, Toolchain}
-
+import toml::{TomlDocument, toml_get_bool, toml_get_string, toml_get_string_array, toml_parse_document, toml_section_keys}
 
 /// Describes a named feature and the features or dependencies it enables.
 pub struct ProjectFeature {
@@ -61,8 +60,16 @@ pub fn read_project_manifest(root: Path) -> ProjectManifest {
     let mut features = Vec[ProjectFeature]::new()
     for feature_name in toml_section_keys(doc, "features") {
         match toml_get_string_array(doc, "features", feature_name) {
-            Some(members) => { features.push(ProjectFeature{feature_name, members}) }
-            None => { manifest_error("Feature '" + feature_name + "' must be a string array in " + manifest_path.as_str()) }
+            Some(members) => {
+                features.push(ProjectFeature {
+                        feature_name, members
+                    }
+                    ,
+                )
+            }
+            None => {
+                manifest_error("Feature '" + feature_name + "' must be a string array in " + manifest_path.as_str())
+            }
         }
     }
 
@@ -79,7 +86,7 @@ pub fn read_project_manifest(root: Path) -> ProjectManifest {
         dependencies.push("sys@core")
     }
 
-    ret ProjectManifest{
+    ret ProjectManifest {
         name,
         version,
         description,
@@ -98,42 +105,69 @@ pub fn read_project_manifest(root: Path) -> ProjectManifest {
 }
 
 /// Returns the project package name.
-pub fn project_manifest_name(manifest: ProjectManifest) -> str { ret manifest.name }
+pub fn project_manifest_name(manifest: ProjectManifest) -> str {
+    ret manifest.name
+}
 /// Returns the declared project version.
-pub fn project_manifest_version(manifest: ProjectManifest) -> str { ret manifest.version }
+pub fn project_manifest_version(manifest: ProjectManifest) -> str {
+    ret manifest.version
+}
 /// Returns the package source repository used for publication.
-pub fn project_manifest_repository(manifest: ProjectManifest) -> str { ret manifest.repository }
+pub fn project_manifest_repository(manifest: ProjectManifest) -> str {
+    ret manifest.repository
+}
 /// Returns the compiler SemVer requirement declared by the package.
-pub fn project_manifest_compiler_requirement(manifest: ProjectManifest) -> str { ret manifest.compiler_requirement }
+pub fn project_manifest_compiler_requirement(manifest: ProjectManifest) -> str {
+    ret manifest.compiler_requirement
+}
 /// Returns direct dependency references in manifest order.
-pub fn project_manifest_dependencies(manifest: ProjectManifest) -> Vec[str] { ret manifest.dependencies }
+pub fn project_manifest_dependencies(manifest: ProjectManifest) -> Vec[str] {
+    ret manifest.dependencies
+}
 /// Returns the configured target triple or target alias.
-pub fn project_manifest_target(manifest: ProjectManifest) -> str { ret manifest.target }
+pub fn project_manifest_target(manifest: ProjectManifest) -> str {
+    ret manifest.target
+}
 /// Returns all declared feature definitions.
-pub fn project_manifest_features(manifest: ProjectManifest) -> Vec[ProjectFeature] { ret manifest.features }
+pub fn project_manifest_features(manifest: ProjectManifest) -> Vec[ProjectFeature] {
+    ret manifest.features
+}
 /// Returns tracked paths explicitly included during publication.
-pub fn project_manifest_publish_include(manifest: ProjectManifest) -> Vec[str] { ret manifest.publish_include }
+pub fn project_manifest_publish_include(manifest: ProjectManifest) -> Vec[str] {
+    ret manifest.publish_include
+}
 /// Returns tracked paths excluded during publication.
-pub fn project_manifest_publish_exclude(manifest: ProjectManifest) -> Vec[str] { ret manifest.publish_exclude }
+pub fn project_manifest_publish_exclude(manifest: ProjectManifest) -> Vec[str] {
+    ret manifest.publish_exclude
+}
 
 /// Expands requested and default features into the enabled feature set.
 pub fn project_manifest_resolve_features(manifest: ProjectManifest, requested: Vec[str]) -> Vec[str] {
     let mut enabled = Vec[str]::new()
     let mut queue = feature_members(manifest.features, "default")
-    for feature in requested { if !contains_string(queue, feature) { queue.push(feature) } }
+    for feature in requested {
+        if !contains_string(queue, feature) {
+            queue.push(feature)
+        }
+    }
     let mut index = 0_usize
     while index < queue.len() {
         match queue.get(index) {
             Some(feature) => {
                 if !is_dependency_member(feature) && !contains_string(enabled, feature) {
-                    if !has_feature(manifest.features, feature) { manifest_error("Unknown feature '" + feature + "' for package " + manifest.name) }
+                    if !has_feature(manifest.features, feature) {
+                        manifest_error("Unknown feature '" + feature + "' for package " + manifest.name)
+                    }
                     enabled.push(feature)
                     for member in feature_members(manifest.features, feature) {
-                        if !is_dependency_member(member) { queue.push(member) }
+                        if !is_dependency_member(member) {
+                            queue.push(member)
+                        }
                     }
                 }
             }
-            None => {}
+            None => {
+            }
         }
         index = index + 1_usize
     }
@@ -144,18 +178,25 @@ pub fn project_manifest_resolve_features(manifest: ProjectManifest, requested: V
 pub fn project_manifest_feature_dependencies(manifest: ProjectManifest, enabled: Vec[str]) -> Vec[str] {
     let mut dependencies = Vec[str]::new()
     let mut queue = Vec[str]::new()
-    for feature in enabled { queue.push(feature) }
+    for feature in enabled {
+        queue.push(feature)
+    }
     let mut index = 0_usize
     while index < queue.len() {
         match queue.get(index) {
             Some(feature) => {
                 for member in feature_members(manifest.features, feature) {
                     if is_dependency_member(member) {
-                        if !contains_string(dependencies, member) { dependencies.push(member) }
-                    } elif !contains_string(queue, member) { queue.push(member) }
+                        if !contains_string(dependencies, member) {
+                            dependencies.push(member)
+                        }
+                    } elif !contains_string(queue, member) {
+                        queue.push(member)
+                    }
                 }
             }
-            None => {}
+            None => {
+            }
         }
         index = index + 1_usize
     }
@@ -167,7 +208,7 @@ pub fn project_target_toolchain(root: Path, target: TargetSpec, defaults: Toolch
     let source = read_file(native_path(root.join("encore.toml").as_str()))
     let doc = toml_parse_document(source)
     let section = "target." + target.triple
-    ret Toolchain{
+    ret Toolchain {
         target_setting(doc, section, "driver", target_setting(doc, "target", "driver", defaults.driver)),
         target_setting(doc, section, "cc", target_setting(doc, "target", "cc", defaults.compiler)),
         target_setting(doc, section, "linker", target_setting(doc, "target", "linker", defaults.linker)),
@@ -189,9 +230,11 @@ pub fn project_manifest_has_dependency(manifest: ProjectManifest, dependency: st
 }
 
 /// Adds a dependency unless the exact reference is already present.
-pub fn project_manifest_add_dependency(manifest: mut ProjectManifest, dependency: str) -> () {
-    if !contains_string(manifest.dependencies, dependency) { manifest.dependencies.push(dependency) }
-    ret ()
+pub fn project_manifest_add_dependency(manifest: mut ProjectManifest, dependency: str) ->() {
+    if !contains_string(manifest.dependencies, dependency) {
+        manifest.dependencies.push(dependency)
+    }
+    ret()
 }
 
 /// Serializes the normalized manifest back to `encore.toml`.
@@ -206,25 +249,35 @@ pub fn write_project_manifest(root: Path, manifest: ProjectManifest) -> i32 {
     source = source + "description = \"" + toml_escape(manifest.description) + "\"\n"
     source = source + "readme = \"" + toml_escape(manifest.readme) + "\"\n"
     source = source + "licence = \"" + toml_escape(manifest.licence) + "\"\n"
-    if manifest.repository != "" { source = source + "repository = \"" + toml_escape(manifest.repository) + "\"\n" }
-    if manifest.compiler_requirement != "" { source = source + "encore = \"" + toml_escape(manifest.compiler_requirement) + "\"\n" }
+    if manifest.repository != "" {
+        source = source + "repository = \"" + toml_escape(manifest.repository) + "\"\n"
+    }
+    if manifest.compiler_requirement != "" {
+        source = source + "encore = \"" + toml_escape(manifest.compiler_requirement) + "\"\n"
+    }
     source = source + "target = \"" + toml_escape(manifest.target) + "\"\n"
     source = source + "dependencies = ["
     let mut index = 0_usize
     while index < manifest.dependencies.len() {
         match manifest.dependencies.get(index) {
             Some(dependency) => {
-                if index > 0_usize { source = source + ", " }
+                if index > 0_usize {
+                    source = source + ", "
+                }
                 source = source + "\"" + toml_escape(dependency) + "\""
             }
-            None => {}
+            None => {
+            }
         }
         index = index + 1_usize
     }
     source = source + "]\n"
     match manifest.build {
-        Some(command) => { source = source + "build = \"" + toml_escape(command) + "\"\n" }
-        None => {}
+        Some(command) => {
+            source = source + "build = \"" + toml_escape(command) + "\"\n"
+        }
+        None => {
+        }
     }
     if manifest.features.len() > 0_usize {
         source = source + "\n[features]\n"
@@ -249,7 +302,9 @@ fn replace_project_dependencies(source: str, dependencies: str) -> str {
     for line in lines {
         let trimmed = trim_manifest_line(line)
         if skipping_array {
-            if contains_manifest_text(trimmed, "]") { skipping_array = false }
+            if contains_manifest_text(trimmed, "]") {
+                skipping_array = false
+            }
             continue
         }
         if starts_with_text(trimmed, "[") {
@@ -262,13 +317,22 @@ fn replace_project_dependencies(source: str, dependencies: str) -> str {
         if in_project && starts_with_text(trimmed, "dependencies") {
             out += "dependencies = " + dependencies + "\n"
             wrote = true
-            if !contains_manifest_text(trimmed, "]") { skipping_array = true }
+            if !contains_manifest_text(trimmed, "]") {
+                skipping_array = true
+            }
             continue
         }
         out += line + "\n"
     }
-    if in_project && !wrote { out += "dependencies = " + dependencies + "\n" }
+    if in_project && !wrote {
+        out += "dependencies = " + dependencies + "\n"
+    }
     ret out
+}
+
+/// Returns the original manifest source with a normalized dependency array.
+pub fn project_manifest_source_with_dependencies(manifest: ProjectManifest, dependencies: Vec[str]) -> str {
+    ret replace_project_dependencies(manifest.original_source, string_array(dependencies))
 }
 
 fn manifest_lines(source: str) -> Vec[str] {
@@ -278,29 +342,43 @@ fn manifest_lines(source: str) -> Vec[str] {
     while index < source.len() {
         let ch = source.slice(index, 1_usize)
         if ch == "\n" {
-            if line.len() > 0_usize && line.slice(line.len() - 1_usize, 1_usize) == "\r" { line = line.slice(0_usize, line.len() - 1_usize) }
+            if line.len() > 0_usize && line.slice(line.len() - 1_usize, 1_usize) == "\r" {
+                line = line.slice(0_usize, line.len() - 1_usize)
+            }
             out.push(line)
             line = ""
-        } else { line += ch }
+        } else {
+            line += ch
+        }
         index += 1_usize
     }
-    if line != "" { out.push(line) }
+    if line != "" {
+        out.push(line)
+    }
     ret out
 }
 
 fn trim_manifest_line(value: str) -> str {
     let mut start = 0_usize
     let mut end = value.len()
-    while start < end && (value.slice(start, 1_usize) == " " || value.slice(start, 1_usize) == "\t") { start += 1_usize }
-    while end > start && (value.slice(end - 1_usize, 1_usize) == " " || value.slice(end - 1_usize, 1_usize) == "\t") { end -= 1_usize }
+    while start < end &&(value.slice(start, 1_usize) == " " || value.slice(start, 1_usize) == "\t") {
+        start += 1_usize
+    }
+    while end > start &&(value.slice(end - 1_usize, 1_usize) == " " || value.slice(end - 1_usize, 1_usize) == "\t") {
+        end -= 1_usize
+    }
     ret value.slice(start, end - start)
 }
 
 fn contains_manifest_text(value: str, needle: str) -> bool {
-    if needle.len() == 0_usize { ret true }
+    if needle.len() == 0_usize {
+        ret true
+    }
     let mut index = 0_usize
     while index + needle.len() <= value.len() {
-        if value.slice(index, needle.len()) == needle { ret true }
+        if value.slice(index, needle.len()) == needle {
+            ret true
+        }
         index += 1_usize
     }
     ret false
@@ -311,17 +389,25 @@ fn manifest_dependency_update_preserves_tooling_sections() -> bool {
     let source = "[project]\nname = \"sample\"\ndependencies = [\n  \"path@one\",\n]\n\n[lint.rules]\nunused-imports = \"deny\"\n\n[format]\nindent-width = 2\n"
     let updated = replace_project_dependencies(source, "[\"path@one\", \"path@two\"]")
     ret contains_manifest_text(updated, "dependencies = [\"path@one\", \"path@two\"]")
-        && contains_manifest_text(updated, "[lint.rules]\nunused-imports = \"deny\"")
-        && contains_manifest_text(updated, "[format]\nindent-width = 2")
+    && contains_manifest_text(updated, "[lint.rules]\nunused-imports = \"deny\"")
+    && contains_manifest_text(updated, "[format]\nindent-width = 2")
 }
 
 fn feature_members(features: Vec[ProjectFeature], name: str) -> Vec[str] {
-    for feature in features { if feature.name == name { ret feature.members } }
+    for feature in features {
+        if feature.name == name {
+            ret feature.members
+        }
+    }
     ret Vec[str]::new()
 }
 
 fn has_feature(features: Vec[ProjectFeature], name: str) -> bool {
-    for feature in features { if feature.name == name { ret true } }
+    for feature in features {
+        if feature.name == name {
+            ret true
+        }
+    }
     ret false
 }
 
@@ -329,7 +415,9 @@ fn is_dependency_member(value: str) -> bool {
     ret starts_with_text(value, "index@") || starts_with_text(value, "workspace@") || starts_with_text(value, "path@") || starts_with_text(value, "git@")
 }
 
-fn starts_with_text(value: str, prefix: str) -> bool { ret prefix.len() <= value.len() && value.slice(0_usize, prefix.len()) == prefix }
+fn starts_with_text(value: str, prefix: str) -> bool {
+    ret prefix.len() <= value.len() && value.slice(0_usize, prefix.len()) == prefix
+}
 
 fn string_array(values: Vec[str]) -> str {
     let mut out = "["
@@ -337,10 +425,13 @@ fn string_array(values: Vec[str]) -> str {
     while index < values.len() {
         match values.get(index) {
             Some(value) => {
-                if index > 0_usize { out = out + ", " }
+                if index > 0_usize {
+                    out = out + ", "
+                }
                 out = out + "\"" + toml_escape(value) + "\""
             }
-            None => {}
+            None => {
+            }
         }
         index = index + 1_usize
     }
@@ -349,22 +440,34 @@ fn string_array(values: Vec[str]) -> str {
 
 fn target_setting(doc: TomlDocument, section: str, key: str, fallback: str) -> str {
     match toml_get_string(doc, section, key) {
-        Option[str]::Some(value) => { ret value }
-        Option[str]::None => { ret fallback }
+        Option[str]::Some(value) => {
+            ret value
+        }
+        Option[str]::None => {
+            ret fallback
+        }
     }
 }
 
 fn target_array_setting(doc: TomlDocument, section: str, key: str, fallback: Vec[str]) -> Vec[str] {
     match toml_get_string_array(doc, section, key) {
-        Option[Vec[str]]::Some(value) => { ret value }
-        Option[Vec[str]]::None => { ret fallback }
+        Option[Vec[str]]::Some(value) => {
+            ret value
+        }
+        Option[Vec[str]]::None => {
+            ret fallback
+        }
     }
 }
 
 fn target_bool_setting(doc: TomlDocument, section: str, key: str, fallback: bool) -> bool {
     match toml_get_bool(doc, section, key) {
-        Option[u1]::Some(value) => { ret value == true }
-        Option[u1]::None => { ret fallback }
+        Option[u1]::Some(value) => {
+            ret value == true
+        }
+        Option[u1]::None => {
+            ret fallback
+        }
     }
 }
 
@@ -373,10 +476,15 @@ fn toml_escape(value: str) -> str {
     let mut index = 0_usize
     while index < value.len() {
         let ch = value.slice(index, 1_usize)
-        if ch == "\\" { out = out + "\\\\" }
-        elif ch == "\"" { out = out + "\\\"" }
-        elif ch == "\n" { out = out + "\\n" }
-        else { out = out + ch }
+        if ch == "\\" {
+            out = out + "\\\\"
+        } elif ch == "\"" {
+            out = out + "\\\""
+        } elif ch == "\n" {
+            out = out + "\\n"
+        } else {
+            out = out + ch
+        }
         index = index + 1_usize
     }
     ret out
@@ -422,15 +530,15 @@ fn contains_string(items: Vec[str], target: str) -> bool {
     ret false
 }
 
-fn panic_missing_manifest(manifest_path: Path) -> () {
+fn panic_missing_manifest(manifest_path: Path) ->() {
     manifest_error("Unable to find encore.toml at " + manifest_path.as_str())
-    ret ()
+    ret()
 }
 
-fn manifest_error(message: str) -> () {
+fn manifest_error(message: str) ->() {
     eprintln("error[manifest]: " + message)
     exit(1_i32)
-    ret ()
+    ret()
 }
 
 fn native_path(value: str) -> str {
@@ -444,8 +552,7 @@ fn replace_backslashes(value: str) -> str {
         let ch = value.slice(index, 1_usize)
         if ch == "\\" {
             out = out + "/"
-        }
-        else {
+        } else {
             out = out + ch
         }
         index = index + 1_usize

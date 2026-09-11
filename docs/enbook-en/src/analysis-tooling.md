@@ -1,8 +1,8 @@
 # Analysis and tooling architecture
 
 Encore source tooling is built around one demand-driven semantic database.
-The compiler, `encore check`, `encore lint`, the formatter, LSP, IDE clients,
-and Graphene must not implement separate name-resolution or type systems.
+The compiler, `encore check`, `encore lint`, the formatter, LSP, and IDE clients
+must not implement separate name-resolution or type systems.
 
 The semantic pipeline is:
 

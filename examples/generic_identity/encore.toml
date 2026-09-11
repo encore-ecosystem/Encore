@@ -1,6 +1,0 @@
-[project]
-name = "generic_identity"
-version = "0.1.0"
-description = "Self-hosted generic function specialization smoke"
-readme = "README.md"
-dependencies = []

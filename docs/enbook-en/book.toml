@@ -3,3 +3,10 @@ authors = ["Maksim Shushkevich"]
 language = "en"
 src = "src"
 title = "Encore Programming Language"
+
+[output.html]
+mathjax-support = true
+additional-js = ["theme/encore.js"]
+
+[output.html.search]
+enable = true
