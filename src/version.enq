@@ -2,7 +2,7 @@
 
 /// Returns the SemVer compatibility version used by package constraints.
 pub fn compiler_version() -> str {
-    ret "0.0.0"
+    ret "0.0.1"
 }
 
 /// Returns the lowercase name of this official release train.
@@ -17,5 +17,5 @@ pub fn compiler_registry_epoch() -> str {
 
 /// Returns the version identity used by binaries, tags, and release assets.
 pub fn compiler_release_version() -> str {
-    ret "0.0.0-neumann"
+    ret "0.0.1-neumann"
 }

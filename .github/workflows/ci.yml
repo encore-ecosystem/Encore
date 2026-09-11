@@ -2,11 +2,6 @@ name: Native CI
 
 on:
   workflow_dispatch:
-    inputs:
-      seed_tag:
-        description: Exact official compiler release tag used for bootstrap
-        required: false
-        type: string
   pull_request:
   push:
     branches: [trunk]
@@ -30,17 +25,11 @@ jobs:
       index_sha: ${{ steps.index.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
-      - name: Select compatible complete compiler once
+      - name: Select latest stable compiler once
         id: seed
         shell: bash
-        env:
-          REQUESTED_SEED_TAG: ${{ inputs.seed_tag }}
         run: |
           set -euo pipefail
-          release=$(tr -d '\r\n' < VERSION)
-          version=${release%%-*}
-          release_name=${release#*-}
-          selected=
           required='[
             "encore-x86_64-unknown-linux-gnu.tar.gz",
             "encore-aarch64-unknown-linux-gnu.tar.gz",
@@ -48,53 +37,19 @@ jobs:
             "encore-aarch64-apple-darwin.tar.gz",
             "encore-x86_64-pc-windows-msvc.zip"
           ]'
-          if test "$release" = 0.0.0-neumann; then
-            # One-time transition: the last stable predates frozen/sending.
-            # This published seed builds the current system libraries directly.
-            selected=v0.3.0-beta.1
-            if test -n "$REQUESTED_SEED_TAG" && test "$REQUESTED_SEED_TAG" != "$selected"; then
-              echo "::error::Encore $version requires bridge seed $selected, got $REQUESTED_SEED_TAG"
-              exit 1
-            fi
-            assets=$(gh release view "$selected" --json isDraft,assets)
-            test "$(jq -r '.isDraft' <<<"$assets")" = false
-            if ! jq -e --argjson required "$required" \
-              '([.assets[].name] as $actual | $required - $actual | length) == 0' <<<"$assets" >/dev/null
-            then
-              echo "::error::Bridge seed $selected is missing required bootstrap assets"
-              exit 1
-            fi
-          elif test -n "$REQUESTED_SEED_TAG"; then
-            selected=$REQUESTED_SEED_TAG
-            assets=$(gh release view "$selected" --json isDraft,assets)
-            test "$(jq -r '.isDraft' <<<"$assets")" = false
-            if jq -e --argjson required "$required" \
-              '([.assets[].name] as $actual | $required - $actual | length) == 0' <<<"$assets" >/dev/null
-            then
-              :
-            else
-              echo "::error::Requested seed $selected is missing required bootstrap assets"
-              exit 1
-            fi
-          else
-            releases=$(gh release list --limit 100 --json tagName,publishedAt,isDraft,isPrerelease)
-            selected=$(jq -r '[.[] | select(.isDraft == false and .isPrerelease == false)
-              | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z][a-z0-9-]*)?$"))]
-              | sort_by(.publishedAt) | last | .tagName // empty' <<<"$releases")
-            test -n "$selected" || { echo "::error::No stable compiler release is available"; exit 1; }
-            assets=$(gh release view "$selected" --json isDraft,isPrerelease,assets)
-            test "$(jq -r '.isDraft or .isPrerelease' <<<"$assets")" = false
-            if ! jq -e --argjson required "$required" \
-              '([.assets[].name] as $actual | $required - $actual | length) == 0' <<<"$assets" >/dev/null
-            then
-              echo "::error::Latest stable seed $selected is incomplete; refusing an older fallback"
-              exit 1
-            fi
-          fi
-          test -n "$selected" || {
-            echo "::error::No complete stable release contains every bootstrap target"
+          releases=$(gh release list --limit 100 --json tagName,publishedAt,isDraft,isPrerelease)
+          selected=$(jq -r '[.[] | select(.isDraft == false and .isPrerelease == false)
+            | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z][a-z0-9-]*)?$"))]
+            | sort_by(.publishedAt) | last | .tagName // empty' <<<"$releases")
+          test -n "$selected" || { echo "::error::No stable compiler release is available"; exit 1; }
+          assets=$(gh release view "$selected" --json isDraft,isPrerelease,assets)
+          test "$(jq -r '.isDraft or .isPrerelease' <<<"$assets")" = false
+          if ! jq -e --argjson required "$required" \
+            '([.assets[].name] as $actual | $required - $actual | length) == 0' <<<"$assets" >/dev/null
+          then
+            echo "::error::Latest stable seed $selected is incomplete; refusing an older fallback"
             exit 1
-          }
+          fi
           echo "tag=$selected" >> "$GITHUB_OUTPUT"
           echo "### Trusted seed: \`$selected\`" >> "$GITHUB_STEP_SUMMARY"
 
