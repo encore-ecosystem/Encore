@@ -218,13 +218,13 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest, release_name: 
     if !verify_archive(work, archive) {
         ret empty
     }
-    if rewrite_dependencies {
-        if !rewrite_archive_dependencies(work, archive, manifest, published_dependencies) {
-            ret empty
-        }
-        if !verify_archive(work, archive) {
-            ret empty
-        }
+    // Git archives of subtree objects use the current time. Normalize every
+    // archive, including packages that need no dependency rewriting.
+    if !normalize_publish_archive(work, archive, manifest, published_dependencies, rewrite_dependencies) {
+        ret empty
+    }
+    if !verify_archive(work, archive) {
+        ret empty
     }
     let checksum = file_sha256(archive.as_str())
     if checksum.len() != 64_usize {
@@ -250,7 +250,7 @@ fn prepare_publish(package_root: Path, manifest: ProjectManifest, release_name: 
     }
 }
 
-fn rewrite_archive_dependencies(work: Path, archive: Path, manifest: ProjectManifest, dependencies: Vec[str]) -> bool {
+fn normalize_publish_archive(work: Path, archive: Path, manifest: ProjectManifest, dependencies: Vec[str], rewrite_dependencies: bool) -> bool {
     let stage = work.join("archive-stage")
     if file_exists(stage.as_str()) {
         remove_dir_all(stage.as_str())
@@ -265,7 +265,7 @@ fn rewrite_archive_dependencies(work: Path, archive: Path, manifest: ProjectMani
         publish_error("unable to stage package archive")
         ret false
     }
-    if write_file(stage.join("encore.toml").as_str(), project_manifest_source_with_dependencies(manifest, dependencies)) != 0_i32 {
+    if rewrite_dependencies && write_file(stage.join("encore.toml").as_str(), project_manifest_source_with_dependencies(manifest, dependencies)) != 0_i32 {
         publish_error("unable to rewrite path dependencies for publication")
         ret false
     }
